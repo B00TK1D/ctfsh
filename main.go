@@ -4,14 +4,12 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"database/sql"
 	"encoding/pem"
 	"fmt"
 	"log"
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -26,8 +24,6 @@ import (
 )
 
 var (
-	db *sql.DB
-
 	// Styles
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("205")).
@@ -50,44 +46,36 @@ var (
 
 	successStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("46"))
+
+	// Main window style
+	windowStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("63")).
+			Padding(1, 4).
+			Margin(1, 2.)
 )
 
-// #region Structs and Enums
-type User struct {
-	ID       int
-	Username string
-	SSHKey   string
-	TeamID   *int
-}
+// Centered style for confirmation messages
+var confirmStyle = lipgloss.NewStyle().Align(lipgloss.Center)
 
-type Team struct {
-	ID    int
-	Name  string
-	Score int
-}
+// Configurable global for SSH domain and port
+var (
+	sshDomain = "ctfsh.com"
+	sshPort   = 2223 // set to 22 to omit -p
+)
 
-type Challenge struct {
-	ID          int
-	Title       string
-	Description string
-	Category    string
-	Points      int
-	Flag        string
-	Solved      bool
-}
-
-type Submission struct {
-	ID          int
-	UserID      int
-	ChallengeID int
-	Flag        string
-	Correct     bool
-	Timestamp   time.Time
+// Represents an item in the challenge list (either a category or a challenge)
+type categoryListItem struct {
+	name       string
+	total      int
+	solved     int
+	isExpanded bool
 }
 
 type keyMap struct {
 	Up     key.Binding
 	Down   key.Binding
+	Select key.Binding
 	Enter  key.Binding
 	Back   key.Binding
 	Cancel key.Binding
@@ -102,7 +90,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Enter},
+		{k.Up, k.Down, k.Select, k.Enter},
 		{k.Back, k.Tab, k.Quit},
 	}
 }
@@ -110,7 +98,8 @@ func (k keyMap) FullHelp() [][]key.Binding {
 var keys = keyMap{
 	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "move up")),
 	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "move down")),
-	Enter:  key.NewBinding(key.WithKeys("enter", " "), key.WithHelp("enter/space", "select")),
+	Select: key.NewBinding(key.WithKeys("enter", " "), key.WithHelp("enter/space", "select")),
+	Enter:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "submit")),
 	Back:   key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("q/esc", "back")),
 	Cancel: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 	Quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
@@ -128,294 +117,57 @@ const (
 	scoreboardView
 	teamView
 	genericInputView
+	flagResultView
+	confirmDeleteTeamView
+	promptJoinTeamView sessionState = 1001 // pick a high value to avoid collision
 )
 
-// Represents an item in the challenge list (either a category or a challenge)
-type categoryListItem struct {
-	name       string
-	total      int
-	solved     int
-	isExpanded bool
-}
-
 type model struct {
-	user           *User
-	sshKey         string // For registration flow
-	state          sessionState
-	width          int
-	height         int
-	challenges     []Challenge
-	categories     []string
-	cursor         int
-	menuCursor     int
-	teamMenuCursor int
-	scoreboard     []Team
-	selectedChal   Challenge
-	usernameInput  textinput.Model
-	flagInput      textinput.Model
-	teamInput      textinput.Model
-	message        string
-	messageType    string
-	help           help.Model
-	showHelp       bool
-	expandedCats   map[string]bool
-	confirmQuit    bool
+	user                 *User
+	sshKey               string // For registration flow
+	state                sessionState
+	width                int
+	height               int
+	challenges           []Challenge
+	categories           []string
+	cursor               int
+	menuCursor           int
+	teamMenuCursor       int
+	scoreboard           []Team
+	scoreboardCursor     int
+	scoreboardSearch     string
+	scoreboardSearchMode bool
+	selectedChal         Challenge
+	usernameInput        textinput.Model
+	flagInput            textinput.Model
+	teamInput            textinput.Model
+	message              string
+	messageType          string
+	help                 help.Model
+	showHelp             bool
+	expandedCats         map[string]bool
+	confirmQuit          bool
 	// For generic input view
-	inputTitle  string
-	inputModel  *textinput.Model
-	onSubmit    func(string) (string, string) // input -> (message, messageType)
-	onBackState sessionState
+	inputTitle   string
+	inputModel   *textinput.Model
+	onSubmit     func(string) (string, string) // input -> (message, messageType)
+	onBackState  sessionState
+	teamSolvers  map[int]string // challenge_id -> username
+	teamJoinCode string
+	joinPrompt   joinPromptInfo
 }
 
-func initDB() error {
-	var err error
-	db, err = sql.Open("sqlite3", "./ctf.db")
-	if err != nil {
-		return err
-	}
+type joinPromptState int
 
-	schema := `
-	CREATE TABLE IF NOT EXISTS users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		username TEXT UNIQUE NOT NULL,
-		ssh_key TEXT NOT NULL UNIQUE,
-		team_id INTEGER,
-		FOREIGN KEY(team_id) REFERENCES teams(id)
-	);
+const (
+	noJoinPrompt joinPromptState = iota
+	promptJoinTeam
+	promptAlreadyOnTeam
+)
 
-	CREATE TABLE IF NOT EXISTS teams (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT UNIQUE NOT NULL,
-		score INTEGER DEFAULT 0
-	);
-
-	CREATE TABLE IF NOT EXISTS challenges (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		title TEXT NOT NULL,
-		description TEXT NOT NULL,
-		category TEXT NOT NULL,
-		points INTEGER NOT NULL,
-		flag TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS submissions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id INTEGER NOT NULL,
-		challenge_id INTEGER NOT NULL,
-		flag TEXT NOT NULL,
-		correct BOOLEAN NOT NULL,
-		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY(user_id) REFERENCES users(id),
-		FOREIGN KEY(challenge_id) REFERENCES challenges(id)
-	);
-	`
-
-	_, err = db.Exec(schema)
-	if err != nil {
-		return err
-	}
-
-	// Insert sample challenges
-	sampleChallenges := []struct {
-		title, desc, category, flag string
-		points                      int
-	}{
-		{"Easy Crypto", "Simple Caesar cipher with shift of 3", "Crypto", "CTF{hello_world}", 100},
-		{"Web Basic", "Find the hidden flag in the HTML", "Web", "CTF{inspect_element}", 150},
-		{"Rev Intro", "Basic reverse engineering challenge", "Reverse", "CTF{strings_command}", 200},
-		{"Pwn Buffer", "Classic buffer overflow", "Pwn", "CTF{stack_smashing}", 300},
-		{"Forensics 1", "Analyze the image metadata", "Forensics", "CTF{hidden_data}", 250},
-		{"Crypto Hard", "RSA with small exponent", "Crypto", "CTF{small_e_attack}", 400},
-		{"Web XSS", "Cross-site scripting vulnerability", "Web", "CTF{alert_box}", 350},
-		{"Rev Advanced", "Anti-debugging techniques", "Reverse", "CTF{debugger_detected}", 500},
-	}
-
-	for _, ch := range sampleChallenges {
-		var exists bool
-		err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM challenges WHERE title = ?)", ch.title).Scan(&exists)
-		if err != nil || exists {
-			continue
-		}
-		_, err = db.Exec("INSERT INTO challenges (title, description, category, points, flag) VALUES (?, ?, ?, ?, ?)",
-			ch.title, ch.desc, ch.category, ch.points, ch.flag)
-		if err != nil {
-			log.Printf("Error inserting sample challenge %s: %v", ch.title, err)
-		}
-	}
-	return nil
-}
-
-func getUserBySSHKey(sshKey string) (*User, error) {
-	user := &User{}
-	err := db.QueryRow("SELECT id, username, ssh_key, team_id FROM users WHERE ssh_key = ?", sshKey).
-		Scan(&user.ID, &user.Username, &user.SSHKey, &user.TeamID)
-	return user, err
-}
-
-func getUserByUsername(username string) (*User, error) {
-	user := &User{}
-	err := db.QueryRow("SELECT id, username, ssh_key, team_id FROM users WHERE username = ?", username).
-		Scan(&user.ID, &user.Username, &user.SSHKey, &user.TeamID)
-	return user, err
-}
-
-func createUser(username, sshKey string) (*User, error) {
-	result, err := db.Exec("INSERT INTO users (username, ssh_key) VALUES (?, ?)", username, sshKey)
-	if err != nil {
-		return nil, err
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-	return &User{ID: int(id), Username: username, SSHKey: sshKey}, nil
-}
-
-func getChallenges() ([]Challenge, error) {
-	rows, err := db.Query("SELECT id, title, description, category, points, flag FROM challenges ORDER BY category, points")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var challenges []Challenge
-	for rows.Next() {
-		var ch Challenge
-		if err := rows.Scan(&ch.ID, &ch.Title, &ch.Description, &ch.Category, &ch.Points, &ch.Flag); err != nil {
-			return nil, err
-		}
-		challenges = append(challenges, ch)
-	}
-	return challenges, nil
-}
-
-func getChallengesSolvedByUser(userID int) (map[int]bool, error) {
-	rows, err := db.Query("SELECT DISTINCT challenge_id FROM submissions WHERE user_id = ? AND correct = 1", userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	solved := make(map[int]bool)
-	for rows.Next() {
-		var challengeID int
-		if err := rows.Scan(&challengeID); err != nil {
-			return nil, err
-		}
-		solved[challengeID] = true
-	}
-	return solved, nil
-}
-
-func getScoreboard() ([]Team, error) {
-	rows, err := db.Query(`
-		SELECT t.id, t.name, COALESCE(SUM(c.points), 0) as score
-		FROM teams t
-		LEFT JOIN users u ON t.id = u.team_id
-		LEFT JOIN (
-			SELECT s.user_id, s.challenge_id
-			FROM submissions s
-			WHERE s.correct = 1
-			GROUP BY s.user_id, s.challenge_id
-		) as solved_challs ON u.id = solved_challs.user_id
-		LEFT JOIN challenges c ON solved_challs.challenge_id = c.id
-		GROUP BY t.id, t.name
-		ORDER BY score DESC, t.name ASC
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var teams []Team
-	for rows.Next() {
-		var team Team
-		if err := rows.Scan(&team.ID, &team.Name, &team.Score); err != nil {
-			return nil, err
-		}
-		teams = append(teams, team)
-	}
-	return teams, nil
-}
-
-func submitFlag(userID, challengeID int, flag string) (bool, error) {
-	var correctFlag string
-	err := db.QueryRow("SELECT flag FROM challenges WHERE id = ?", challengeID).Scan(&correctFlag)
-	if err != nil {
-		return false, err
-	}
-
-	correct := strings.TrimSpace(flag) == strings.TrimSpace(correctFlag)
-
-	var alreadySolved bool
-	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM submissions WHERE user_id = ? AND challenge_id = ? AND correct = 1)",
-		userID, challengeID).Scan(&alreadySolved)
-	if err != nil {
-		return false, err
-	}
-
-	if alreadySolved {
-		return false, fmt.Errorf("you have already solved this challenge")
-	}
-
-	_, err = db.Exec("INSERT INTO submissions (user_id, challenge_id, flag, correct) VALUES (?, ?, ?, ?)",
-		userID, challengeID, flag, correct)
-
-	return correct, err
-}
-
-func createAndJoinTeam(creatorID int, teamName string) (*Team, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback() // Rollback on error
-
-	res, err := tx.Exec("INSERT INTO teams (name) VALUES (?)", teamName)
-	if err != nil {
-		return nil, fmt.Errorf("team name likely already exists")
-	}
-
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = tx.Exec("UPDATE users SET team_id = ? WHERE id = ?", id, creatorID)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-
-	return &Team{ID: int(id), Name: teamName}, nil
-}
-
-func joinTeam(userID int, teamName string) (int, error) {
-	var teamID int
-	err := db.QueryRow("SELECT id FROM teams WHERE name = ?", teamName).Scan(&teamID)
-	if err != nil {
-		return 0, fmt.Errorf("team not found")
-	}
-
-	_, err = db.Exec("UPDATE users SET team_id = ? WHERE id = ?", teamID, userID)
-	if err != nil {
-		return 0, err
-	}
-	return teamID, nil
-}
-
-func leaveTeam(userID int) error {
-	_, err := db.Exec("UPDATE users SET team_id = NULL WHERE id = ?", userID)
-	return err
-}
-
-func getTeamName(teamID int) (string, error) {
-	var name string
-	err := db.QueryRow("SELECT name FROM teams WHERE id = ?", teamID).Scan(&name)
-	return name, err
+type joinPromptInfo struct {
+	team  *Team
+	state joinPromptState
 }
 
 // initialModel is for users who are already authenticated.
@@ -427,7 +179,7 @@ func initialModel(user *User) model {
 }
 
 // newRegistrationModel is for new users who need to pick a username.
-func newRegistrationModel(sshKey string) model {
+func newRegistrationModel(sshKey string, joinPrompt joinPromptInfo) model {
 	unInput := textinput.New()
 	unInput.Focus()
 	unInput.CharLimit = 32
@@ -437,6 +189,7 @@ func newRegistrationModel(sshKey string) model {
 		state:         authView,
 		usernameInput: unInput,
 		help:          help.New(),
+		joinPrompt:    joinPrompt,
 	}
 }
 
@@ -459,6 +212,22 @@ func (m *model) finishInitialization() {
 			if solvedMap[challenges[i].ID] {
 				challenges[i].Solved = true
 			}
+		}
+		// If user is on a team, get solvers for each challenge and join code
+		if m.user.TeamID != nil {
+			solvers, _ := getTeamChallengeSolvers(*m.user.TeamID)
+			m.teamSolvers = solvers
+			_, code, _ := getTeamNameAndCode(*m.user.TeamID)
+			m.teamJoinCode = code
+		} else {
+			// For solo users, treat their username as the team name and only show their solves
+			solvers := make(map[int]string)
+			solvedMap, _ := getChallengesSolvedByUser(m.user.ID)
+			for cid := range solvedMap {
+				solvers[cid] = m.user.Username
+			}
+			m.teamSolvers = solvers
+			m.teamJoinCode = ""
 		}
 	}
 	m.challenges = challenges
@@ -521,6 +290,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateTeamView(msg)
 		case genericInputView:
 			return m.updateGenericInputView(msg)
+		case flagResultView:
+			return m.updateFlagResultView(msg)
+		case confirmDeleteTeamView:
+			return m.updateConfirmDeleteTeamView(msg)
+		case promptJoinTeamView:
+			return m.updatePromptJoinTeamView(msg)
 		}
 	}
 	return m, nil
@@ -530,7 +305,13 @@ func (m model) View() string {
 	var s string
 	// The quit confirmation overrides any other view
 	if m.confirmQuit {
-		return "\n  Are you sure you want to quit? (y/n)\n"
+		msg := "Are you sure you want to quit? (y/n)"
+		centered := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Render(msg)
+		verticalPad := (m.height - 1) / 2
+		if verticalPad < 0 {
+			verticalPad = 0
+		}
+		return strings.Repeat("\n", verticalPad) + centered
 	}
 
 	switch m.state {
@@ -546,30 +327,60 @@ func (m model) View() string {
 		s = m.renderScoreboardView()
 	case teamView:
 		s = m.renderTeamView()
+		break
 	case genericInputView:
 		s = m.renderGenericInputView()
+	case flagResultView:
+		s = m.renderFlagResultView()
+	case confirmDeleteTeamView:
+		msg := m.renderConfirmDeleteTeamView()
+		centered := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Render(msg)
+		verticalPad := (m.height - 1) / 2
+		if verticalPad < 0 {
+			verticalPad = 0
+		}
+		return strings.Repeat("\n", verticalPad) + centered
+	case promptJoinTeamView:
+		s = m.renderPromptJoinTeamView()
 	default:
 		s = "Unknown view state."
 	}
 
-	// Don't show help during auth
-	if m.state == authView {
-		return s
+	// Always horizontally center the window based on current m.width
+	window := windowStyle.Width(m.width / 2).MaxWidth(m.width - 4).Render(s)
+	windowLines := strings.Split(window, "\n")
+	maxLineWidth := 0
+	for _, line := range windowLines {
+		w := lipgloss.Width(line)
+		if w > maxLineWidth {
+			maxLineWidth = w
+		}
 	}
-
-	helpView := ""
-	if m.showHelp {
-		helpView = "\n" + helpStyle.Render(m.help.View(keys))
-	} else {
-		helpView = "\n" + helpStyle.Render("Press '?' for help.")
+	leftPad := (m.width - maxLineWidth) / 2
+	if leftPad < 0 {
+		leftPad = 0
 	}
-
-	return s + helpView
+	padStr := strings.Repeat(" ", leftPad)
+	for i, line := range windowLines {
+		windowLines[i] = padStr + line
+	}
+	window = strings.Join(windowLines, "\n")
+	windowHeight := lipgloss.Height(window)
+	if windowHeight < m.height {
+		verticalPad := (m.height - windowHeight) / 2
+		if verticalPad < 0 {
+			verticalPad = 0
+		}
+		return strings.Repeat("\n", verticalPad) + window
+	}
+	return window
 }
 
 func (m model) updateAuthView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch {
+	case key.Matches(msg, keys.Help):
+		m.showHelp = !m.showHelp
 	case key.Matches(msg, keys.Enter):
 		username := m.usernameInput.Value()
 		if username == "" {
@@ -598,9 +409,14 @@ func (m model) updateAuthView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		log.Printf("New user '%s' created and authenticated.", newUser.Username)
 		m.user = newUser
 		m.finishInitialization() // Load challenges and other data
-		m.state = menuView
 		m.message = ""
 		m.messageType = ""
+		// If joinPrompt is set, prompt to join team
+		if m.joinPrompt.state == promptJoinTeam && m.joinPrompt.team != nil {
+			m.state = promptJoinTeamView
+			return m, nil
+		}
+		m.state = menuView
 		return m, nil
 	}
 
@@ -623,7 +439,7 @@ func (m model) updateMenuView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.menuCursor < 2 {
 			m.menuCursor++
 		}
-	case key.Matches(msg, keys.Enter):
+	case key.Matches(msg, keys.Select):
 		switch m.menuCursor {
 		case 0:
 			m.state = challengeView
@@ -686,7 +502,7 @@ func (m model) updateChallengeView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(renderList)-1 {
 			m.cursor++
 		}
-	case key.Matches(msg, keys.Enter):
+	case key.Matches(msg, keys.Select):
 		if len(renderList) == 0 {
 			break
 		}
@@ -724,7 +540,7 @@ func (m model) updateChallengeDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = challengeView
 	case key.Matches(msg, keys.Help):
 		m.showHelp = !m.showHelp
-	case key.Matches(msg, keys.Enter):
+	case key.Matches(msg, keys.Select):
 		if !m.selectedChal.Solved {
 			m.state = genericInputView
 			m.onBackState = challengeDetailView
@@ -742,6 +558,16 @@ func (m model) updateChallengeDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				if correct {
 					m.selectedChal.Solved = true
+					// Also update the challenge in the main list
+					for i := range m.challenges {
+						if m.challenges[i].ID == m.selectedChal.ID {
+							m.challenges[i].Solved = true
+							break
+						}
+					}
+					// Refresh all challenge and solver state
+					m.finishInitialization()
+					m.selectedChal = Challenge{} // clear selectedChal to force detail view to reload
 					return "Correct! Flag accepted.", "success"
 				}
 				return "Incorrect flag. Try again.", "error"
@@ -752,13 +578,85 @@ func (m model) updateChallengeDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateScoreboardView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.scoreboardSearchMode {
+		switch msg.Type {
+		case tea.KeyRunes:
+			m.scoreboardSearch += msg.String()
+			return m, nil
+		case tea.KeyBackspace:
+			if len(m.scoreboardSearch) > 0 {
+				m.scoreboardSearch = m.scoreboardSearch[:len(m.scoreboardSearch)-1]
+			}
+			return m, nil
+		case tea.KeyEsc, tea.KeyEnter:
+			m.scoreboardSearchMode = false
+			m.scoreboardSearch = ""
+			m.scoreboardCursor = 0
+			return m, nil
+		case tea.KeyUp:
+			if m.scoreboardCursor > 0 {
+				m.scoreboardCursor--
+			}
+			return m, nil
+		case tea.KeyDown:
+			filtered := m.filteredScoreboard()
+			if m.scoreboardCursor < len(filtered)-1 {
+				m.scoreboardCursor++
+			}
+			return m, nil
+		}
+		return m, nil
+	}
 	switch {
 	case key.Matches(msg, keys.Back):
 		m.state = menuView
 	case key.Matches(msg, keys.Help):
 		m.showHelp = !m.showHelp
+	case key.Matches(msg, key.NewBinding(key.WithKeys("/"))):
+		m.scoreboardSearchMode = true
+		m.scoreboardSearch = ""
+		m.scoreboardCursor = 0
+		return m, nil
+	case key.Matches(msg, keys.Up):
+		if m.scoreboardCursor > 0 {
+			m.scoreboardCursor--
+		}
+		return m, nil
+	case key.Matches(msg, keys.Down):
+		filtered := m.filteredScoreboard()
+		if m.scoreboardCursor < len(filtered)-1 {
+			m.scoreboardCursor++
+		}
+		return m, nil
 	}
 	return m, nil
+}
+
+// Helper: number of visible scoreboard rows
+func (m model) scoreboardRows() int {
+	// Always show up to min(20, m.height-13) teams
+	maxRows := m.height - 13
+	if maxRows > 20 {
+		return 20
+	}
+	if maxRows < 1 {
+		return 1
+	}
+	return maxRows
+}
+
+// Helper: filtered scoreboard
+func (m model) filteredScoreboard() []Team {
+	if m.scoreboardSearch == "" {
+		return m.scoreboard
+	}
+	var filtered []Team
+	for _, t := range m.scoreboard {
+		if strings.Contains(strings.ToLower(t.Name), strings.ToLower(m.scoreboardSearch)) {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
 }
 
 func (m model) updateTeamView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -767,20 +665,65 @@ func (m model) updateTeamView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = menuView
 		m.message = ""
 		return m, nil
+	case key.Matches(msg, keys.Help):
+		m.showHelp = !m.showHelp
+		return m, nil
+	case key.Matches(msg, keys.Up):
+		if m.teamMenuCursor > 0 {
+			m.teamMenuCursor--
+		}
+		return m, nil
+	case key.Matches(msg, keys.Down):
+		if m.user.TeamID != nil && m.teamMenuCursor < 1 {
+			m.teamMenuCursor++
+		} else if m.user.TeamID == nil && m.teamMenuCursor < 0 {
+			m.teamMenuCursor++
+		}
+		return m, nil
 	}
 
-	// If user is already on a team, the only option is to leave
+	// If user is already on a team, the only option is to leave or regenerate join code
 	if m.user.TeamID != nil {
 		switch {
-		case key.Matches(msg, keys.Enter):
-			err := leaveTeam(m.user.ID)
-			if err != nil {
-				m.message = "Error leaving team: " + err.Error()
-				m.messageType = "error"
-			} else {
-				m.user.TeamID = nil
-				m.message = "You have left the team."
-				m.messageType = "success"
+		case key.Matches(msg, keys.Select):
+			if m.teamMenuCursor == 0 {
+				// Leave team logic (as before)
+				count, err := countTeamMembers(*m.user.TeamID)
+				if err != nil {
+					m.message = "Error checking team members: " + err.Error()
+					m.messageType = "error"
+					return m, nil
+				}
+				if count == 1 {
+					m.state = confirmDeleteTeamView
+					return m, nil
+				} else {
+					err := leaveTeam(m.user.ID)
+					if err != nil {
+						m.message = "Error leaving team: " + err.Error()
+						m.messageType = "error"
+					} else {
+						m.user.TeamID = nil
+						m.message = "You have left the team."
+						m.messageType = "success"
+					}
+					return m, nil
+				}
+			} else if m.teamMenuCursor == 1 {
+				// Regenerate join code
+				if m.user.TeamID != nil {
+					newCode, err := regenerateTeamJoinCode(*m.user.TeamID)
+					if err != nil {
+						m.message = "Error regenerating join code: " + err.Error()
+						m.messageType = "error"
+					} else {
+						m.teamJoinCode = newCode
+						m.finishInitialization() // refresh join code and view
+						m.message = "Join code regenerated!"
+						m.messageType = "success"
+					}
+				}
+				return m, nil
 			}
 		}
 		return m, nil
@@ -795,10 +738,10 @@ func (m model) updateTeamView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.teamMenuCursor--
 		}
 	case key.Matches(msg, keys.Down):
-		if m.teamMenuCursor < 1 {
+		if m.teamMenuCursor < 0 {
 			m.teamMenuCursor++
 		}
-	case key.Matches(msg, keys.Enter):
+	case key.Matches(msg, keys.Select):
 		m.state = genericInputView
 		m.onBackState = teamView
 		m.inputModel = &m.teamInput
@@ -818,19 +761,6 @@ func (m model) updateTeamView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.user.TeamID = &team.ID
 				return "Team '" + name + "' created and joined!", "success"
 			}
-		} else { // Join Team
-			m.inputTitle = "Join Team"
-			m.onSubmit = func(name string) (string, string) {
-				if name == "" {
-					return "", ""
-				}
-				teamID, err := joinTeam(m.user.ID, name)
-				if err != nil {
-					return "Failed to join team: " + err.Error(), "error"
-				}
-				m.user.TeamID = &teamID
-				return "Successfully joined team '" + name + "'!", "success"
-			}
 		}
 	}
 	return m, nil
@@ -840,6 +770,8 @@ func (m model) updateGenericInputView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch {
+	case key.Matches(msg, keys.Help):
+		m.showHelp = !m.showHelp
 	case key.Matches(msg, keys.Cancel):
 		m.state = m.onBackState
 		m.inputModel.Blur()
@@ -849,7 +781,15 @@ func (m model) updateGenericInputView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.message = msg
 		m.messageType = msgType
 		if msgType == "success" {
-			// On success, go back to previous screen to see result
+			// If we just created a team, go to teamView and refresh join code
+			if m.inputTitle == "Create Team" {
+				m.finishInitialization()
+				m.state = teamView
+				m.teamMenuCursor = 0
+				m.inputModel.Blur()
+				return m, nil
+			}
+			// On other success, go back to previous screen to see result
 			m.state = m.onBackState
 			m.inputModel.Blur()
 		}
@@ -859,190 +799,80 @@ func (m model) updateGenericInputView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) renderAuthView() string {
-	var b strings.Builder
-	b.WriteString("\n  Welcome to the CTF!\n")
-	b.WriteString("  Please choose a username to register your public key.\n\n")
-	b.WriteString("  " + m.usernameInput.View() + "\n\n")
-
-	if m.message != "" {
-		style := errorStyle
-		b.WriteString("  " + style.Render(m.message) + "\n")
+func (m model) updateFlagResultView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// On any key, return to challenge list
+	// Refresh teamSolvers if on a team
+	if m.user != nil && m.user.TeamID != nil {
+		solvers, _ := getTeamChallengeSolvers(*m.user.TeamID)
+		m.teamSolvers = solvers
 	}
-
-	b.WriteString("\n  " + helpStyle.Render("Press Enter to confirm, Ctrl+C to quit."))
-	return b.String()
+	m.state = challengeView
+	m.message = ""
+	m.messageType = ""
+	return m, nil
 }
 
-func (m model) renderMenuView() string {
-	title := titleStyle.Render("🚩 CTF Platform")
-
-	var teamName string
-	var err error
-	if m.user.TeamID != nil {
-		teamName, err = getTeamName(*m.user.TeamID)
-		if err != nil {
-			teamName = "Error"
-		}
+func (m model) updateConfirmDeleteTeamView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, keys.Quit) || key.Matches(msg, keys.Back) {
+		m.state = teamView
+		return m, nil
 	}
-
-	var userInfo string
-	if m.user.TeamID != nil {
-		userInfo = fmt.Sprintf("User: %s | Team: %s", m.user.Username, teamName)
-	} else {
-		userInfo = fmt.Sprintf("User: %s | No team", m.user.Username)
-	}
-
-	options := []string{"Challenges", "Scoreboard", "Team Management"}
-	var menu strings.Builder
-	for i, option := range options {
-		cursor := "  "
-		if i == m.menuCursor {
-			cursor = selectedStyle.Render("> ")
-		}
-		menu.WriteString(cursor + option + "\n")
-	}
-
-	return fmt.Sprintf("%s\n\n%s\n\n%s", title, userInfo, menu.String())
-}
-
-func (m model) renderChallengeView() string {
-	title := titleStyle.Render("Challenges")
-	renderList := m.buildChallengeRenderList()
-
-	if len(renderList) == 0 {
-		return title + "\n\nNo challenges available."
-	}
-
-	var content strings.Builder
-	for i, item := range renderList {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = selectedStyle.Render("> ")
-		}
-
-		switch v := item.(type) {
-		case categoryListItem:
-			arrow := "▶"
-			if v.isExpanded {
-				arrow = "▼"
+	switch msg.String() {
+	case "y", "Y":
+		// Delete team and leave
+		if m.user.TeamID != nil {
+			teamID := *m.user.TeamID
+			err := leaveTeam(m.user.ID)
+			if err != nil {
+				m.message = "Error leaving team: " + err.Error()
+				m.messageType = "error"
+				m.state = teamView
+				return m, nil
 			}
-			content.WriteString(fmt.Sprintf("%s%s %s (%d/%d)\n",
-				cursor, arrow, categoryStyle.Render(v.name), v.solved, v.total))
-		case Challenge:
-			status := ""
-			if v.Solved {
-				status = successStyle.Render(" ✓")
+			err = deleteTeam(teamID)
+			if err != nil {
+				m.message = "Error deleting team: " + err.Error()
+				m.messageType = "error"
+				m.state = teamView
+				return m, nil
 			}
-			content.WriteString(fmt.Sprintf("  %s%s (%d pts)%s\n", cursor, v.Title, v.Points, status))
+			m.user.TeamID = nil
+			m.message = "You have left and deleted the team."
+			m.messageType = "success"
+			m.state = teamView
+			return m, nil
 		}
+	case "n", "N":
+		// Cancel
+		m.state = teamView
+		return m, nil
 	}
-
-	return fmt.Sprintf("%s\n\n%s", title, content.String())
+	return m, nil
 }
 
-func (m model) renderChallengeDetailView() string {
-	ch := m.selectedChal
-	title := titleStyle.Render(ch.Title)
-
-	status := "Unsolved"
-	if ch.Solved {
-		status = successStyle.Render("✓ SOLVED")
-	}
-
-	details := fmt.Sprintf(
-		"Category: %s\nPoints: %d\nStatus: %s\n\nDescription:\n%s\n\n",
-		categoryStyle.Render(ch.Category),
-		ch.Points,
-		status,
-		ch.Description,
-	)
-
-	action := "Press Enter to submit flag"
-	if ch.Solved {
-		action = "You have already completed this challenge!"
-	}
-
-	return fmt.Sprintf("%s\n\n%s%s", title, details, action)
-}
-
-func (m model) renderScoreboardView() string {
-	title := titleStyle.Render("Scoreboard")
-
-	if len(m.scoreboard) == 0 {
-		return title + "\n\nNo teams on the board yet!"
-	}
-
-	var content strings.Builder
-	content.WriteString(fmt.Sprintf("%-4s %-20s %s\n", "Rank", "Team", "Score"))
-	content.WriteString(strings.Repeat("─", 35) + "\n")
-
-	for i, team := range m.scoreboard {
-		content.WriteString(fmt.Sprintf("%-4d %-20s %d\n", i+1, team.Name, team.Score))
-	}
-
-	return fmt.Sprintf("%s\n\n%s", title, content.String())
-}
-
-func (m model) renderTeamView() string {
-	title := titleStyle.Render("Team Management")
-
-	var content string
-	// If user is on a team, show leave option
-	if m.user.TeamID != nil {
-		teamName, err := getTeamName(*m.user.TeamID)
-		if err != nil {
-			teamName = "Error fetching name"
-		}
-		content = fmt.Sprintf("Current team: %s\n\n%s",
-			teamName,
-			selectedStyle.Render("> ")+"Leave Team (Press Enter)")
-	} else {
-		// User not on a team, show create/join options
-		options := []string{"Create a new Team", "Join an existing Team"}
-		var menu strings.Builder
-		menu.WriteString("You have not joined a team.\n\n")
-		for i, option := range options {
-			cursor := "  "
-			if i == m.teamMenuCursor {
-				cursor = selectedStyle.Render("> ")
+func (m model) updatePromptJoinTeamView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		if m.user != nil && m.joinPrompt.team != nil {
+			_, err := joinTeam(m.user.ID, m.joinPrompt.team.Name)
+			if err != nil {
+				m.message = "Failed to join team: " + err.Error()
+				m.messageType = "error"
+				m.state = menuView
+				return m, nil
 			}
-			menu.WriteString(cursor + option + "\n")
+			m.user.TeamID = &m.joinPrompt.team.ID
+			m.finishInitialization()
+			m.message = "Joined team '" + m.joinPrompt.team.Name + "'!"
+			m.messageType = "success"
 		}
-		content = menu.String()
+		m.state = menuView
+		return m, nil
+	case "n", "N":
+		m.state = menuView
+		return m, nil
 	}
-
-	message := ""
-	if m.message != "" {
-		style := successStyle
-		if m.messageType == "error" {
-			style = errorStyle
-		}
-		message = "\n\n" + style.Render(m.message)
-	}
-
-	return fmt.Sprintf("%s\n\n%s%s", title, content, message)
-}
-
-func (m model) renderGenericInputView() string {
-	title := titleStyle.Render(m.inputTitle)
-	input := m.inputModel.View()
-
-	message := ""
-	if m.message != "" {
-		style := successStyle
-		if m.messageType == "error" {
-			style = errorStyle
-		}
-		message = "\n\n" + style.Render(m.message)
-	}
-
-	return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s%s",
-		title,
-		"Enter value below:",
-		input,
-		"Press Esc to go back.",
-		message)
+	return m, nil
 }
 
 // teaHandler is responsible for the entire lifecycle of a user session,
@@ -1056,6 +886,14 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 
 	sshKeyBytes := s.PublicKey().Marshal()
 	sshKeyStr := string(sshKeyBytes)
+	sshUser := s.User()
+	var joinPrompt joinPromptInfo
+	team, err := getTeamByJoinCode(sshUser)
+	if err == nil {
+		joinPrompt = joinPromptInfo{team: team, state: promptJoinTeam}
+	} else {
+		joinPrompt = joinPromptInfo{team: nil, state: noJoinPrompt}
+	}
 
 	// 1. Check if a user exists with the provided public key.
 	user, err := getUserBySSHKey(sshKeyStr)
@@ -1065,15 +903,20 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		m := initialModel(user)
 		m.width = pty.Window.Width
 		m.height = pty.Window.Height
-		return m, []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
+		// If user is not on a team and joinPrompt is set, prompt to join
+		if user.TeamID == nil && joinPrompt.state == promptJoinTeam && joinPrompt.team != nil {
+			m.joinPrompt = joinPrompt
+			m.state = promptJoinTeamView
+		}
+		return m, []tea.ProgramOption{tea.WithAltScreen()}
 	}
 
 	// 2. If key not found, start the registration flow.
 	log.Printf("New public key detected. Starting registration flow.")
-	m := newRegistrationModel(sshKeyStr)
+	m := newRegistrationModel(sshKeyStr, joinPrompt)
 	m.width = pty.Window.Width
 	m.height = pty.Window.Height
-	return m, []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
+	return m, []tea.ProgramOption{tea.WithAltScreen()}
 }
 
 func main() {
@@ -1081,6 +924,12 @@ func main() {
 		log.Fatal("Failed to initialize database:", err)
 	}
 	defer db.Close()
+
+	// For testing: generate 200 teams if CTFSH_TEST_TEAMS is set
+	if os.Getenv("CTFSH_TEST_TEAMS") != "" {
+		log.Println("Generating 200 test teams...")
+		// generateTestTeams(200) // This function is removed, so this line is removed.
+	}
 
 	hostKeyPath := "host_key"
 	if _, err := os.Stat(hostKeyPath); os.IsNotExist(err) {
