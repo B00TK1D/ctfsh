@@ -6,9 +6,13 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"log"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 var db *sql.DB
@@ -32,13 +36,15 @@ type Team struct {
 
 // Challenge represents a CTF challenge.
 type Challenge struct {
-	ID          int
-	Title       string
-	Description string
-	Category    string
-	Points      int
-	Flag        string
-	Solved      bool
+	ID            int
+	Title         string
+	Description   string
+	Category      string
+	Points        int
+	Flag          string
+	Solved        bool
+	Author        string
+	DownloadFiles []string
 }
 
 // Submission represents a flag submission.
@@ -80,9 +86,7 @@ func initDB() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		title TEXT NOT NULL,
 		description TEXT NOT NULL,
-		category TEXT NOT NULL,
-		points INTEGER NOT NULL,
-		flag TEXT NOT NULL
+		category TEXT NOT NULL
 	);
 
 	CREATE TABLE IF NOT EXISTS submissions (
@@ -102,33 +106,6 @@ func initDB() error {
 		return err
 	}
 
-	// Insert sample challenges
-	sampleChallenges := []struct {
-		title, desc, category, flag string
-		points                      int
-	}{
-		{"Easy Crypto", "Simple Caesar cipher with shift of 3", "Crypto", "CTF{hello_world}", 100},
-		{"Web Basic", "Find the hidden flag in the HTML", "Web", "CTF{inspect_element}", 150},
-		{"Rev Intro", "Basic reverse engineering challenge", "Reverse", "CTF{strings_command}", 200},
-		{"Pwn Buffer", "Classic buffer overflow", "Pwn", "CTF{stack_smashing}", 300},
-		{"Forensics 1", "Analyze the image metadata", "Forensics", "CTF{hidden_data}", 250},
-		{"Crypto Hard", "RSA with small exponent", "Crypto", "CTF{small_e_attack}", 400},
-		{"Web XSS", "Cross-site scripting vulnerability", "Web", "CTF{alert_box}", 350},
-		{"Rev Advanced", "Anti-debugging techniques", "Reverse", "CTF{debugger_detected}", 500},
-	}
-
-	for _, ch := range sampleChallenges {
-		var exists bool
-		err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM challenges WHERE title = ?)", ch.title).Scan(&exists)
-		if err != nil || exists {
-			continue
-		}
-		_, err = db.Exec("INSERT INTO challenges (title, description, category, points, flag) VALUES (?, ?, ?, ?, ?)",
-			ch.title, ch.desc, ch.category, ch.points, ch.flag)
-		if err != nil {
-			log.Printf("Error inserting sample challenge %s: %v", ch.title, err)
-		}
-	}
 	return nil
 }
 
@@ -200,20 +177,58 @@ func createUser(username, sshKey string) (*User, error) {
 	return &User{ID: int(id), Username: username, SSHKey: sshKey}, nil
 }
 
+// getChallenges loads all challenge YAML files from ./chals/*/ctfsh.yml or .yaml
 func getChallenges() ([]Challenge, error) {
-	rows, err := db.Query("SELECT id, title, description, category, points, flag FROM challenges ORDER BY category, points")
+	var challenges []Challenge
+	var idCounter int
+	err := filepath.WalkDir("chals", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := strings.ToLower(d.Name())
+		if name == "ctfsh.yml" || name == "ctfsh.yaml" {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			var yml struct {
+				Challenge struct {
+					Name        string `yaml:"name"`
+					Author      string `yaml:"author"`
+					Category    string `yaml:"category"`
+					Description string `yaml:"description"`
+					Flag        struct {
+						Value string `yaml:"value"`
+					} `yaml:"flag"`
+					Points   int `yaml:"points"`
+					Download struct {
+						Files []string `yaml:"files"`
+					} `yaml:"download"`
+				} `yaml:"challenge"`
+			}
+			if err := yaml.Unmarshal(data, &yml); err != nil {
+				return err
+			}
+			idCounter++
+			ch := Challenge{
+				ID:            idCounter,
+				Title:         yml.Challenge.Name,
+				Description:   yml.Challenge.Description,
+				Category:      yml.Challenge.Category,
+				Points:        yml.Challenge.Points,
+				Flag:          yml.Challenge.Flag.Value,
+				Author:        yml.Challenge.Author,
+				DownloadFiles: yml.Challenge.Download.Files,
+			}
+			challenges = append(challenges, ch)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer rows.Close()
-
-	var challenges []Challenge
-	for rows.Next() {
-		var ch Challenge
-		if err := rows.Scan(&ch.ID, &ch.Title, &ch.Description, &ch.Category, &ch.Points, &ch.Flag); err != nil {
-			return nil, err
-		}
-		challenges = append(challenges, ch)
 	}
 	return challenges, nil
 }

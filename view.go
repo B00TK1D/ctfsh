@@ -127,12 +127,22 @@ func (m model) renderChallengeDetailView() string {
 	}
 
 	details := fmt.Sprintf(
-		"Category: %s\nPoints: %d\nStatus: %s\n\nDescription:\n%s\n\n",
+		"Category: %s\nPoints: %d\n",
 		categoryStyle.Render(ch.Category),
 		ch.Points,
-		status,
-		ch.Description,
 	)
+	if ch.Author != "" {
+		details += fmt.Sprintf("Author: %s\n", ch.Author)
+	}
+	scpCmd := ""
+	if sshPort == 22 {
+		scpCmd = fmt.Sprintf("scp -r %s:%s .", sshDomain, ch.Title)
+	} else {
+		scpCmd = fmt.Sprintf("scp -P %d -r %s:%s .", sshPort, sshDomain, ch.Title)
+	}
+	details += fmt.Sprintf("Download: %s\n", scpCmd)
+	details += "(Only the files listed in the challenge's YAML will be available for download.)\n"
+	details += fmt.Sprintf("Status: %s\n\nDescription:\n%s\n\n", status, ch.Description)
 
 	action := "Press Enter to submit flag"
 	if ch.Solved {
@@ -165,10 +175,7 @@ func (m model) renderScoreboardView() string {
 	b.WriteString(strings.Repeat("─", 45) + "\n")
 
 	// Show up to 20 rows, or as many as fit on the screen
-	windowSize := m.scoreboardRows()
-	if windowSize > 20 {
-		windowSize = 20
-	}
+	windowSize := min(m.scoreboardRows(), 20)
 	teamRows := 0
 	if len(filtered) == 0 {
 		b.WriteString(helpStyle.Render("(no teams match search)\n"))
@@ -185,10 +192,7 @@ func (m model) renderScoreboardView() string {
 	if start < 0 {
 		start = 0
 	}
-	end := start + windowSize
-	if end > len(filtered) {
-		end = len(filtered)
-	}
+	end := min(start + windowSize, len(filtered))
 	for i := start; i < end; i++ {
 		if i < len(filtered) {
 			team := filtered[i]

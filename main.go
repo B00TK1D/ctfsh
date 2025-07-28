@@ -11,6 +11,10 @@ import (
 	"sort"
 	"strings"
 
+	"io"
+	"io/fs"
+	"path/filepath"
+
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -20,7 +24,9 @@ import (
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
+	"github.com/charmbracelet/wish/scp"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/pkg/sftp"
 )
 
 var (
@@ -62,6 +68,8 @@ var confirmStyle = lipgloss.NewStyle().Align(lipgloss.Center)
 var (
 	sshDomain = "ctfsh.com"
 	sshPort   = 2223 // set to 22 to omit -p
+	// Configurable download root
+	downloadRoot = "./downloads"
 )
 
 // Represents an item in the challenge list (either a category or a challenge)
@@ -307,10 +315,7 @@ func (m model) View() string {
 	if m.confirmQuit {
 		msg := "Are you sure you want to quit? (y/n)"
 		centered := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Render(msg)
-		verticalPad := (m.height - 1) / 2
-		if verticalPad < 0 {
-			verticalPad = 0
-		}
+		verticalPad := max((m.height - 1) / 2, 0)
 		return strings.Repeat("\n", verticalPad) + centered
 	}
 
@@ -327,7 +332,6 @@ func (m model) View() string {
 		s = m.renderScoreboardView()
 	case teamView:
 		s = m.renderTeamView()
-		break
 	case genericInputView:
 		s = m.renderGenericInputView()
 	case flagResultView:
@@ -335,10 +339,7 @@ func (m model) View() string {
 	case confirmDeleteTeamView:
 		msg := m.renderConfirmDeleteTeamView()
 		centered := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Render(msg)
-		verticalPad := (m.height - 1) / 2
-		if verticalPad < 0 {
-			verticalPad = 0
-		}
+		verticalPad := max((m.height - 1) / 2, 0)
 		return strings.Repeat("\n", verticalPad) + centered
 	case promptJoinTeamView:
 		s = m.renderPromptJoinTeamView()
@@ -356,10 +357,7 @@ func (m model) View() string {
 			maxLineWidth = w
 		}
 	}
-	leftPad := (m.width - maxLineWidth) / 2
-	if leftPad < 0 {
-		leftPad = 0
-	}
+	leftPad := max((m.width - maxLineWidth) / 2, 0)
 	padStr := strings.Repeat(" ", leftPad)
 	for i, line := range windowLines {
 		windowLines[i] = padStr + line
@@ -367,10 +365,7 @@ func (m model) View() string {
 	window = strings.Join(windowLines, "\n")
 	windowHeight := lipgloss.Height(window)
 	if windowHeight < m.height {
-		verticalPad := (m.height - windowHeight) / 2
-		if verticalPad < 0 {
-			verticalPad = 0
-		}
+		verticalPad := max((m.height - windowHeight) / 2, 0)
 		return strings.Repeat("\n", verticalPad) + window
 	}
 	return window
@@ -457,8 +452,8 @@ func (m model) updateMenuView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) buildChallengeRenderList() []interface{} {
-	var items []interface{}
+func (m *model) buildChallengeRenderList() []any {
+	var items []any
 	categoryMap := make(map[string][]Challenge)
 	solvedByCategory := make(map[string]int)
 
@@ -799,7 +794,7 @@ func (m model) updateGenericInputView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) updateFlagResultView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) updateFlagResultView(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// On any key, return to challenge list
 	// Refresh teamSolvers if on a team
 	if m.user != nil && m.user.TeamID != nil {
@@ -875,6 +870,80 @@ func (m model) updatePromptJoinTeamView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// sftpHandler implements a readonly SFTP handler for the chals/ directory
+// (based on the provided example)
+type sftpHandler struct {
+	root string
+}
+
+var (
+	_ sftp.FileLister = &sftpHandler{}
+	_ sftp.FileReader = &sftpHandler{}
+)
+
+type listerAt []fs.FileInfo
+
+func (l listerAt) ListAt(ls []fs.FileInfo, offset int64) (int, error) {
+	if offset >= int64(len(l)) {
+		return 0, io.EOF
+	}
+	n := copy(ls, l[offset:])
+	if n < len(ls) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func (s *sftpHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	f, err := os.Open(filepath.Join(s.root, r.Filepath))
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+func (s *sftpHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
+	switch r.Method {
+	case "List":
+		entries, err := os.ReadDir(filepath.Join(s.root, r.Filepath))
+		if err != nil {
+			return nil, fmt.Errorf("sftp: %w", err)
+		}
+		infos := make([]fs.FileInfo, len(entries))
+		for i, entry := range entries {
+			info, err := entry.Info()
+			if err != nil {
+				return nil, err
+			}
+			infos[i] = info
+		}
+		return listerAt(infos), nil
+	case "Stat":
+		fi, err := os.Stat(filepath.Join(s.root, r.Filepath))
+		if err != nil {
+			return nil, err
+		}
+		return listerAt{fi}, nil
+	default:
+		return nil, sftp.ErrSSHFxOpUnsupported
+	}
+}
+
+func sftpSubsystem(root string) ssh.SubsystemHandler {
+	return func(s ssh.Session) {
+		fs := &sftpHandler{root}
+		srv := sftp.NewRequestServer(s, sftp.Handlers{
+			FileList: fs,
+			FileGet:  fs,
+		})
+		if err := srv.Serve(); err == io.EOF {
+			_ = srv.Close()
+		} else if err != nil {
+			wish.Fatalln(s, "sftp:", err)
+		}
+	}
+}
+
 // teaHandler is responsible for the entire lifecycle of a user session,
 // including authentication, user creation, and initializing the TUI.
 func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
@@ -925,11 +994,13 @@ func main() {
 	}
 	defer db.Close()
 
-	// For testing: generate 200 teams if CTFSH_TEST_TEAMS is set
-	if os.Getenv("CTFSH_TEST_TEAMS") != "" {
-		log.Println("Generating 200 test teams...")
-		// generateTestTeams(200) // This function is removed, so this line is removed.
+	challenges, _ := getChallenges()
+	if err := PrepareChallengeFS(challenges, downloadRoot); err != nil {
+		log.Fatal("Failed to prepare challenge FS: ", err)
 	}
+
+	root := downloadRoot
+	handler := scp.NewFileSystemHandler(root)
 
 	hostKeyPath := "host_key"
 	if _, err := os.Stat(hostKeyPath); os.IsNotExist(err) {
@@ -948,12 +1019,12 @@ func main() {
 	s, err := wish.NewServer(
 		wish.WithAddress(":2223"),
 		wish.WithHostKeyPath(hostKeyPath),
-		// We allow all public key connections to proceed to our teaHandler,
-		// where we implement the custom authentication and user creation logic.
 		wish.WithPublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
 			return true
 		}),
+		wish.WithSubsystem("sftp", sftpSubsystem(root)),
 		wish.WithMiddleware(
+			scp.Middleware(handler, handler),
 			bubbletea.Middleware(teaHandler),
 			logging.Middleware(),
 		),
@@ -961,7 +1032,6 @@ func main() {
 	if err != nil {
 		log.Fatal("Could not create server:", err)
 	}
-
 	log.Println("Starting CTF SSH server on :2223")
 	log.Fatal(s.ListenAndServe())
 }

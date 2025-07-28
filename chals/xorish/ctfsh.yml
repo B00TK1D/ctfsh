@@ -1,0 +1,10 @@
+challenge:
+  name: "XORish"
+  author: "quasar"
+  category: "Crypto"
+  description: "I got a scrambled message"
+  flag:
+    value: "flag{x0r_x0r}"
+  download:
+    files:
+      - xorish.pcap
