@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/exp/maps"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,15 +37,17 @@ type Team struct {
 
 // Challenge represents a CTF challenge.
 type Challenge struct {
-	ID            int
-	Title         string
-	Description   string
-	Category      string
-	Points        int
-	Flag          string
-	Solved        bool
-	Author        string
-	DownloadFiles []string
+	ID          int
+	Name        string
+	Description string
+	Category    string
+	Points      int
+	Flag        string
+	Solved      bool
+	Author      string
+	Downloads   []string
+	Ports       []int
+	BuildDir    string
 }
 
 // Submission represents a flag submission.
@@ -56,6 +59,8 @@ type Submission struct {
 	Correct     bool
 	Timestamp   time.Time
 }
+
+var challenges map[string]Challenge
 
 // --- DB functions ---
 
@@ -178,8 +183,11 @@ func createUser(username, sshKey string) (*User, error) {
 }
 
 // getChallenges loads all challenge YAML files from ./chals/*/ctfsh.yml or .yaml
-func getChallenges() ([]Challenge, error) {
-	var challenges []Challenge
+func getChallenges() map[string]Challenge {
+	if challenges != nil {
+		return maps.Clone(challenges)
+	}
+	challenges = make(map[string]Challenge)
 	var idCounter int
 	err := filepath.WalkDir("chals", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -196,17 +204,17 @@ func getChallenges() ([]Challenge, error) {
 			}
 			var yml struct {
 				Challenge struct {
-					Name        string `yaml:"name"`
-					Author      string `yaml:"author"`
-					Category    string `yaml:"category"`
-					Description string `yaml:"description"`
-					Flag        struct {
-						Value string `yaml:"value"`
-					} `yaml:"flag"`
-					Points   int `yaml:"points"`
-					Download struct {
-						Files []string `yaml:"files"`
-					} `yaml:"download"`
+					Name        string   `yaml:"name"`
+					Author      string   `yaml:"author"`
+					Category    string   `yaml:"category"`
+					Description string   `yaml:"description"`
+					Flag        string   `yaml:"flag"`
+					Points      int      `yaml:"points"`
+					Downloads   []string `yaml:"downloads"`
+					Instance    struct {
+						Build string `yaml:"build"`
+						Ports []int  `yaml:"ports"`
+					} `yaml:"instance"`
 				} `yaml:"challenge"`
 			}
 			if err := yaml.Unmarshal(data, &yml); err != nil {
@@ -214,23 +222,25 @@ func getChallenges() ([]Challenge, error) {
 			}
 			idCounter++
 			ch := Challenge{
-				ID:            idCounter,
-				Title:         yml.Challenge.Name,
-				Description:   yml.Challenge.Description,
-				Category:      yml.Challenge.Category,
-				Points:        yml.Challenge.Points,
-				Flag:          yml.Challenge.Flag.Value,
-				Author:        yml.Challenge.Author,
-				DownloadFiles: yml.Challenge.Download.Files,
+				ID:          idCounter,
+				Name:        yml.Challenge.Name,
+				Description: yml.Challenge.Description,
+				Category:    yml.Challenge.Category,
+				Points:      yml.Challenge.Points,
+				Flag:        yml.Challenge.Flag,
+				Author:      yml.Challenge.Author,
+				Downloads:   yml.Challenge.Downloads,
+				Ports:       yml.Challenge.Instance.Ports,
+				BuildDir:    yml.Challenge.Instance.Build,
 			}
-			challenges = append(challenges, ch)
+			challenges[strings.ToLower(ch.Name)] = ch
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil
 	}
-	return challenges, nil
+	return maps.Clone(challenges)
 }
 
 func getChallengesSolvedByUser(userID int) (map[int]bool, error) {

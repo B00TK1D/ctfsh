@@ -1,5 +1,8 @@
-FROM python:3.11-slim
+FROM python:3.12 AS app
+
+RUN apt update && apt install -y socat
+
 WORKDIR /app
-COPY app.py .
-ENV FLAG=CTF{default}
-CMD ["python", "app.py"]
+COPY main.py ./
+
+CMD ["socat" , "TCP-LISTEN:5000,reuseaddr,fork", "EXEC:python3 main.py"]

@@ -1,10 +1,8 @@
 challenge:
-  name: "Operator"
+  name: "operator"
   author: "B00TK1D"
   category: "Forensics"
   description: "Somebody sent some traffic I can't understand. Can you find the flag?"
-  flag:
-    value: "flag{r3al_0p3r4t0r}"
-  download:
-    files:
-      - operator.pcap
+  flag: "flag{r3al_0p3r4t0r}"
+  downloads:
+    - operator.pcap

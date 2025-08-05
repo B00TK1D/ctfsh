@@ -1,10 +1,47 @@
-// view.go
-// Package view contains all rendering functions for the CTFsh application.
 package main
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+var (
+	// Styles
+	titleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205")).
+			Bold(true)
+
+	authorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("204"))
+
+	categoryStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("86")).
+			Bold(true)
+
+	commandStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("247"))
+
+	selectedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("170")).
+			Bold(true)
+
+	helpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196"))
+
+	successStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("46"))
+
+	// Main window style
+	windowStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("63")).
+			Padding(1, 4).
+			Margin(1, 2.)
 )
 
 func (m model) renderAuthView() string {
@@ -98,7 +135,7 @@ func (m model) renderChallengeView() string {
 					}
 				}
 			}
-			content.WriteString(fmt.Sprintf("  %s%s (%d pts)%s\n", cursor, v.Title, v.Points, status))
+			content.WriteString(fmt.Sprintf("  %s%s (%d pts)%s\n", cursor, v.Name, v.Points, status))
 		}
 	}
 
@@ -113,7 +150,11 @@ func (m model) renderChallengeView() string {
 
 func (m model) renderChallengeDetailView() string {
 	ch := m.selectedChal
-	title := titleStyle.Render(ch.Title)
+	titleStr := ch.Name
+	if ch.Author != "" {
+		titleStr += authorStyle.Render(fmt.Sprintf(" (by %s)", ch.Author))
+	}
+	title := titleStyle.Render(titleStr)
 
 	status := "Unsolved"
 	if ch.Solved {
@@ -127,35 +168,49 @@ func (m model) renderChallengeDetailView() string {
 	}
 
 	details := fmt.Sprintf(
-		"Category: %s\nPoints: %d\n",
+		"%s - %d pts",
 		categoryStyle.Render(ch.Category),
 		ch.Points,
 	)
-	if ch.Author != "" {
-		details += fmt.Sprintf("Author: %s\n", ch.Author)
-	}
-	scpCmd := ""
-	if sshPort == 22 {
-		scpCmd = fmt.Sprintf("scp -r %s:%s .", sshDomain, ch.Title)
-	} else {
-		scpCmd = fmt.Sprintf("scp -P %d -r %s:%s .", sshPort, sshDomain, ch.Title)
-	}
-	details += fmt.Sprintf("Download: %s\n", scpCmd)
-	details += "(Only the files listed in the challenge's YAML will be available for download.)\n"
-	details += fmt.Sprintf("Status: %s\n\nDescription:\n%s\n\n", status, ch.Description)
-
-	action := "Press Enter to submit flag"
 	if ch.Solved {
-		action = "You have already completed this challenge!"
+		details += successStyle.Render(" ✓ Solved")
+		// Show solver if on a team
+		if m.teamSolvers != nil {
+			if solver, ok := m.teamSolvers[ch.ID]; ok {
+				details += fmt.Sprintf(" by %s", authorStyle.Render(solver))
+			}
+		}
+	}
+	details += fmt.Sprintf("\n\n%s\n", ch.Description)
+
+	if len(ch.Downloads) > 0 {
+		scpCmd := "scp"
+		if sshPort != 22 {
+			scpCmd += fmt.Sprintf(" -P %d", sshPort)
+		}
+		scpCmd += fmt.Sprintf(" -r %s:%s .", sshDomain, ch.Name)
+		details += fmt.Sprintf("\nDownload: %s", commandStyle.Render(scpCmd))
+	}
+
+	if len(ch.Ports) > 0 {
+		tunnelCmd := "ssh"
+		if sshPort != 22 {
+			tunnelCmd += fmt.Sprintf(" -p %d", sshPort)
+		}
+		for _, port := range ch.Ports {
+			tunnelCmd += fmt.Sprintf(" -L %d:%s:%d", port, ch.Name, port)
+		}
+		tunnelCmd += fmt.Sprintf(" %s@%s", ch.Name, sshDomain)
+		details += fmt.Sprintf("\nInstance: %s", commandStyle.Render(tunnelCmd))
 	}
 
 	help := ""
 	if m.showHelp {
 		help = "\n" + helpStyle.Render("Enter/Space: submit flag  q/Esc: back  ?: toggle help")
 	} else {
-		help = "\n" + helpStyle.Render("Press '?' for help.")
+		help = "\n" + helpStyle.Render("Press Enter to submit flag or '?' for help.")
 	}
-	return fmt.Sprintf("%s\n\n%s%s%s", title, details, action, help)
+	return fmt.Sprintf("%s\n\n%s\n%s", title, details, help)
 }
 
 func (m model) renderScoreboardView() string {
@@ -192,7 +247,7 @@ func (m model) renderScoreboardView() string {
 	if start < 0 {
 		start = 0
 	}
-	end := min(start + windowSize, len(filtered))
+	end := min(start+windowSize, len(filtered))
 	for i := start; i < end; i++ {
 		if i < len(filtered) {
 			team := filtered[i]
@@ -294,13 +349,13 @@ func (m model) renderGenericInputView() string {
 	title := titleStyle.Render(m.inputTitle)
 	input := m.inputModel.View()
 
-	message := ""
+	message := "\n"
 	if m.message != "" {
 		style := successStyle
 		if m.messageType == "error" {
 			style = errorStyle
 		}
-		message = "\n\n" + style.Render(m.message)
+		message = "\n" + style.Render(m.message)
 	}
 
 	help := ""

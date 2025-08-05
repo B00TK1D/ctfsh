@@ -11,7 +11,7 @@ import (
 	"github.com/lxc/incus/shared/api"
 )
 
-func createChallengeImage(c incus.InstanceServer, name string, challengePath string) {
+func createContainerTemplate(c incus.InstanceServer, name string, challengePath string, templateFile string) {
 	builderName := name + "-builder"
 
 	op, err := c.CreateInstance(api.InstancesPost{
@@ -19,15 +19,18 @@ func createChallengeImage(c incus.InstanceServer, name string, challengePath str
 		InstancePut: api.InstancePut{
 			Architecture: "x86_64",
 			Config: map[string]string{
-				"security.nesting":                    "true",
-				"security.syscalls.intercept.mknod":   "true",
-				"security.syscalls.intercept.sysinfo": "true",
+				"security.nesting": "true",
 			},
 			Devices: map[string]map[string]string{
+				"root": {
+					"type": "disk",
+					"path": "/",
+					"pool": poolName,
+				},
 				"chal": {
 					"type":   "disk",
 					"source": challengePath,
-					"path":   "/mnt/chal",
+					"path":   "/chal",
 				},
 			},
 		},
@@ -52,7 +55,6 @@ func createChallengeImage(c incus.InstanceServer, name string, challengePath str
 	runCmdInContainer(c, builderName, `apk add docker docker-compose`)
 	runCmdInContainer(c, builderName, `rc-update add docker default`)
 	runCmdInContainer(c, builderName, `service docker start`)
-	runCmdInContainer(c, builderName, `mkdir -p /chal && cp -r /mnt/chal/* /chal/`)
 	runCmdInContainer(c, builderName, `cd /chal && docker compose build && docker compose create`)
 
 	op, err = c.UpdateInstanceState(builderName, api.InstanceStatePut{
@@ -62,22 +64,23 @@ func createChallengeImage(c incus.InstanceServer, name string, challengePath str
 	must(err)
 	must(op.Wait())
 
-	// Request image creation
-	op, err = c.CreateImage(api.ImagesPost{
-		Source: &api.ImagesPostSource{
-			Type: "container",
-			Name: builderName,
-		},
-		Aliases: []api.ImageAlias{{
-			Name:        "ctfsh/" + name,
-			Description: "CTFsh container for " + name,
-		}},
-	}, nil)
-	must(err)
-	must(op.Wait())
+	op, err = c.CreateInstanceBackup(builderName, api.InstanceBackupsPost{
+		Name: builderName,
+	})
 
 	must(err)
 	must(op.Wait())
+
+	func() {
+		f, err := os.Create(templateFile)
+		must(err)
+		defer f.Close()
+		_, err = c.GetInstanceBackupFile(builderName, builderName, &incus.BackupFileRequest{
+			BackupFile: f,
+		})
+		must(err)
+	}()
+	fmt.Printf("Backup of '%s' exported to '%s'.\n", builderName, templateFile)
 
 	op, err = c.DeleteInstance(builderName)
 	must(err)

@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/lxc/incus/client"
 	"github.com/lxc/incus/shared/api"
@@ -12,24 +14,21 @@ const (
 	backupDir = "./backups"
 )
 
-func startChallenge(c incus.InstanceServer, name string) {
+func startChallenge(c incus.InstanceServer, name string, templateFile string) {
 	deleteInstanceIfExists(c, name)
 
-	op, err := c.CreateInstance(api.InstancesPost{
-		Name: name,
-		InstancePut: api.InstancePut{
-			Architecture: "x86_64",
-			Config: map[string]string{
-				"security.nesting": "true",
-			},
-		},
-		Source: api.InstanceSource{
-			Type:  "image",
-			Alias: "ctfsh/" + name,
-		},
-	})
-	must(err)
-	must(op.Wait())
+	func() {
+		f, err := os.Open(templateFile)
+		must(err)
+		defer f.Close()
+		op, err := c.CreateInstanceFromBackup(incus.InstanceBackupArgs{
+			BackupFile: f,
+			PoolName:   poolName,
+			Name:       name,
+		})
+		must(err)
+		must(op.Wait())
+	}()
 
 	startOp, err := c.UpdateInstanceState(name, api.InstanceStatePut{
 		Action:  "start",
@@ -50,9 +49,18 @@ func main() {
 	must(err)
 	ensurePoolExists(c, poolName)
 
-	createChallengeImage(c, name, path)
+	templateFile, err := filepath.Abs(backupDir + "/" + name + ".tar.gz")
+	must(err)
+	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
+		err = os.MkdirAll(backupDir, 0755)
+		must(err)
+	}
 
-	startChallenge(c, name)
+	if _, err := os.Stat(templateFile); os.IsNotExist(err) {
+		createContainerTemplate(c, name, path, templateFile)
+	}
+
+	startChallenge(c, name, templateFile)
 
 	log.Println("Starting port proxy for container on port 8000...")
 	proxyPort8000ToContainer(c, name)
