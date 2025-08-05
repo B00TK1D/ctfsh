@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Styles
 var (
-	// Styles
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("205")).
 			Bold(true)
@@ -41,7 +41,7 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("63")).
 			Padding(1, 4).
-			Margin(1, 2.)
+			Margin(1, 2)
 )
 
 func (m model) renderAuthView() string {

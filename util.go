@@ -2,8 +2,8 @@ package main
 
 import (
 	"log"
-	"runtime/debug"
 	"math/rand"
+	"runtime/debug"
 )
 
 func must(err error) {
