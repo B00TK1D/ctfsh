@@ -91,7 +91,8 @@ func initDB() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		title TEXT NOT NULL,
 		description TEXT NOT NULL,
-		category TEXT NOT NULL
+		category TEXT NOT NULL,
+		flag TEXT NOT NULL
 	);
 
 	CREATE TABLE IF NOT EXISTS submissions (
@@ -109,6 +110,19 @@ func initDB() error {
 	_, err = db.Exec(schema)
 	if err != nil {
 		return err
+	}
+
+	// Add all challenges to the database if they don't exist
+	chals := getChallenges()
+	if chals == nil {
+		return fmt.Errorf("failed to load challenges")
+	}
+	for _, ch := range chals {
+		_, err := db.Exec("INSERT OR IGNORE INTO challenges (id, title, description, category, flag) VALUES (?, ?, ?, ?, ?)",
+			ch.ID, ch.Name, ch.Description, ch.Category, ch.Flag)
+		if err != nil {
+			return fmt.Errorf("failed to insert challenge %s: %w", ch.Name, err)
+		}
 	}
 
 	return nil
@@ -219,6 +233,9 @@ func getChallenges() map[string]Challenge {
 			}
 			if err := yaml.Unmarshal(data, &yml); err != nil {
 				return err
+			}
+			if yml.Challenge.Points <= 0 {
+				yml.Challenge.Points = 500 // Default points if not specified
 			}
 			idCounter++
 			ch := Challenge{

@@ -131,7 +131,7 @@ func (m model) renderChallengeView() string {
 				// Show solver if on a team
 				if m.teamSolvers != nil {
 					if solver, ok := m.teamSolvers[v.ID]; ok {
-						status += fmt.Sprintf(" (Solved by %s)", solver)
+						status += successStyle.Render(fmt.Sprintf(" (%s)", solver))
 					}
 				}
 			}
@@ -158,11 +158,11 @@ func (m model) renderChallengeDetailView() string {
 
 	status := "Unsolved"
 	if ch.Solved {
-		status = successStyle.Render("✓ SOLVED")
+		status = successStyle.Render("✓ Solved")
 		// Show solver if on a team
 		if m.teamSolvers != nil {
 			if solver, ok := m.teamSolvers[ch.ID]; ok {
-				status += fmt.Sprintf(" (Solved by %s)", solver)
+				status += successStyle.Render(fmt.Sprintf(" (%s)", solver))
 			}
 		}
 	}
@@ -177,7 +177,7 @@ func (m model) renderChallengeDetailView() string {
 		// Show solver if on a team
 		if m.teamSolvers != nil {
 			if solver, ok := m.teamSolvers[ch.ID]; ok {
-				details += fmt.Sprintf(" by %s", authorStyle.Render(solver))
+				details += successStyle.Render(fmt.Sprintf(" by %s", solver))
 			}
 		}
 	}
@@ -205,10 +205,12 @@ func (m model) renderChallengeDetailView() string {
 	}
 
 	help := ""
-	if m.showHelp {
-		help = "\n" + helpStyle.Render("Enter/Space: submit flag  q/Esc: back  ?: toggle help")
-	} else {
-		help = "\n" + helpStyle.Render("Press Enter to submit flag or '?' for help.")
+	if !ch.Solved {
+		if m.showHelp {
+			help = "\n" + helpStyle.Render("Enter/Space: submit flag  q/Esc: back  ?: toggle help")
+		} else {
+			help = "\n" + helpStyle.Render("Press Enter to submit flag or '?' for help.")
+		}
 	}
 	return fmt.Sprintf("%s\n\n%s\n%s", title, details, help)
 }

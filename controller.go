@@ -425,6 +425,17 @@ func (m *model) buildChallengeRenderList() []any {
 		}
 	}
 
+	// Sort the challenges by point value within each category (break ties by name)
+	for cat, challenges := range categoryMap {
+		sort.Slice(challenges, func(i, j int) bool {
+			if challenges[i].Points == challenges[j].Points {
+				return challenges[i].Name < challenges[j].Name
+			}
+			return challenges[i].Points > challenges[j].Points
+		})
+		categoryMap[cat] = challenges
+	}
+
 	for _, category := range m.categories {
 		items = append(items, categoryListItem{
 			name:       category,
