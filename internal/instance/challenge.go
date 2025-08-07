@@ -43,7 +43,7 @@ func CreateChallengeImage(name string, challengePath string) {
 				},
 				"eth0": {
 					"type":   "nic",
-					"networ": "chals",
+					"network": "chals",
 				},
 			},
 		},
