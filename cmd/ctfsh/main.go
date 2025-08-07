@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/charmbracelet/ssh"
@@ -43,7 +44,13 @@ func main() {
 		if len(ch.Ports) > 0 {
 			wg.Add(1)
 			go func() {
-				instance.CreateChallengeImage(ch.Name, config.ChallengeDir+"/"+ch.Name)
+				path, err := filepath.Abs(config.ChallengeDir + "/" + ch.Name)
+				if err != nil {
+					log.Printf("Failed to get absolute path for challenge %s: %v", ch.Name, err)
+					wg.Done()
+					return
+				}
+				instance.CreateChallengeImage(ch.Name, path)
 				wg.Done()
 			}()
 		}
