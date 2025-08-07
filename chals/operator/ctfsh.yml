@@ -3,6 +3,6 @@ challenge:
   author: "B00TK1D"
   category: "Forensics"
   description: "Somebody sent some traffic I can't understand. Can you find the flag?"
-  flag: "flag{r3al_0p3r4t0r}"
+  flag: "cube{c00l_0p3r4t0rs_us3_mult1_st4g3_p4yl04ds_8ab49338}"
   downloads:
     - operator.pcap

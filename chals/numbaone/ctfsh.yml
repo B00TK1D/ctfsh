@@ -1,0 +1,10 @@
+challenge:
+  name: "numba one"
+  author: "flocto and oh_word"
+  category: "Crypto"
+  description: "Snake lang best lang."
+  flag: "cube{python_numba_1}"
+  downloads:
+    - crackme.py
+    - encrypt_module.cpython-313-x86_64-linux-gnu.so
+    - flag.enc
