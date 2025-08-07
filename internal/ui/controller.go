@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/muesli/termenv"
 
 	"ctfsh/internal/db"
 	"ctfsh/internal/instance"
@@ -498,6 +499,8 @@ func TeaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		wish.Fatalln(s, "No PTY requested.")
 		return nil, nil
 	}
+
+	lipgloss.SetColorProfile(termenv.TrueColor)
 
 	sshKeyBytes := s.PublicKey().Marshal()
 	sshKeyStr := string(sshKeyBytes)
