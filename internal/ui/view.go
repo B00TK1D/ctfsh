@@ -4,67 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
-	"ctfsh/internal/db"
 	"ctfsh/internal/config"
+	"ctfsh/internal/db"
 )
-
-// Styles
-var (
-	titleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("205")).
-			Bold(true)
-
-	authorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("204"))
-
-	categoryStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("86")).
-			Bold(true)
-
-	commandStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("247"))
-
-	selectedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("170")).
-			Bold(true)
-
-	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
-
-	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196"))
-
-	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("46"))
-
-	// Main window style
-	windowStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("63")).
-			Padding(1, 4).
-			Margin(1, 2)
-)
-
-func (m model) renderAuthView() string {
-	var b strings.Builder
-	b.WriteString("\n  Welcome to the CTF!\n")
-	b.WriteString("  Please choose a username to register your public key.\n\n")
-	b.WriteString("  " + m.usernameInput.View() + "\n\n")
-
-	if m.message != "" {
-		style := errorStyle
-		b.WriteString("  " + style.Render(m.message) + "\n")
-	}
-
-	if m.showHelp {
-		b.WriteString("\n" + helpStyle.Render("Enter: confirm  Ctrl+C: quit  ?: toggle help"))
-	} else {
-		b.WriteString("\n" + helpStyle.Render("Press '?' for help."))
-	}
-	return b.String()
-}
 
 func (m model) renderMenuView() string {
 	title := titleStyle.Render("🚩 CTFsh")
@@ -106,7 +48,7 @@ func (m model) renderMenuView() string {
 
 func (m model) renderChallengeView() string {
 	title := titleStyle.Render("Challenges")
-	renderList := m.buildChallengeRenderList()
+	renderList := m.challenges.buildChallengeRenderList()
 
 	if len(renderList) == 0 {
 		return title + "\n\nNo challenges available."
@@ -115,7 +57,7 @@ func (m model) renderChallengeView() string {
 	var content strings.Builder
 	for i, item := range renderList {
 		cursor := "  "
-		if i == m.cursor {
+		if i == m.challenges.cursor {
 			cursor = selectedStyle.Render("> ")
 		}
 
@@ -127,13 +69,13 @@ func (m model) renderChallengeView() string {
 			}
 			content.WriteString(fmt.Sprintf("%s%s %s (%d/%d)\n",
 				cursor, arrow, categoryStyle.Render(v.name), v.solved, v.total))
-		case db.Challenge:
+		case challengeWrapper:
 			status := ""
-			if v.Solved {
+			if v.solved {
 				status = successStyle.Render(" ✓")
 				// Show solver if on a team
-				if m.teamSolvers != nil {
-					if solver, ok := m.teamSolvers[v.ID]; ok {
+				if m.challenges.teamSolvers != nil {
+					if solver, ok := m.challenges.teamSolvers[v.ID]; ok {
 						status += successStyle.Render(fmt.Sprintf(" (%s)", solver))
 					}
 				}
@@ -152,7 +94,7 @@ func (m model) renderChallengeView() string {
 }
 
 func (m model) renderChallengeDetailView() string {
-	ch := m.selectedChal
+	ch := m.challenges.selectedChal
 	titleStr := ch.Name
 	if ch.Author != "" {
 		titleStr += authorStyle.Render(fmt.Sprintf(" (by %s)", ch.Author))
@@ -160,11 +102,11 @@ func (m model) renderChallengeDetailView() string {
 	title := titleStyle.Render(titleStr)
 
 	status := "Unsolved"
-	if ch.Solved {
+	if ch.solved {
 		status = successStyle.Render("✓ Solved")
 		// Show solver if on a team
-		if m.teamSolvers != nil {
-			if solver, ok := m.teamSolvers[ch.ID]; ok {
+		if m.challenges.teamSolvers != nil {
+			if solver, ok := m.challenges.teamSolvers[ch.ID]; ok {
 				status += successStyle.Render(fmt.Sprintf(" (%s)", solver))
 			}
 		}
@@ -175,11 +117,11 @@ func (m model) renderChallengeDetailView() string {
 		categoryStyle.Render(ch.Category),
 		ch.Points,
 	)
-	if ch.Solved {
+	if ch.solved {
 		details += successStyle.Render(" ✓ Solved")
 		// Show solver if on a team
-		if m.teamSolvers != nil {
-			if solver, ok := m.teamSolvers[ch.ID]; ok {
+		if m.challenges.teamSolvers != nil {
+			if solver, ok := m.challenges.teamSolvers[ch.ID]; ok {
 				details += successStyle.Render(fmt.Sprintf(" by %s", solver))
 			}
 		}
@@ -208,7 +150,7 @@ func (m model) renderChallengeDetailView() string {
 	}
 
 	help := ""
-	if !ch.Solved {
+	if !ch.solved {
 		if m.showHelp {
 			help = "\n" + helpStyle.Render("Enter/Space: submit flag  q/Esc: back  ?: toggle help")
 		} else {
@@ -221,12 +163,12 @@ func (m model) renderChallengeDetailView() string {
 func (m model) renderScoreboardView() string {
 	title := titleStyle.Render("Scoreboard")
 
-	filtered := m.filteredScoreboard()
+	filtered := m.scoreboard.filteredScoreboard()
 	var b strings.Builder
 	// Always show title and search bar
 	b.WriteString(title + "\n\n")
-	if m.scoreboardSearchMode {
-		b.WriteString("Search: " + m.scoreboardSearch + "\n")
+	if m.scoreboard.searchMode {
+		b.WriteString("Search: " + m.scoreboard.search + "\n")
 	} else {
 		b.WriteString("Press '/' to search\n")
 	}
@@ -235,7 +177,7 @@ func (m model) renderScoreboardView() string {
 	b.WriteString(strings.Repeat("─", 45) + "\n")
 
 	// Show up to 20 rows, or as many as fit on the screen
-	windowSize := min(m.scoreboardRows(), 20)
+	windowSize := min(len(m.scoreboard.teams), 20)
 	teamRows := 0
 	if len(filtered) == 0 {
 		b.WriteString(helpStyle.Render("(no teams match search)\n"))
@@ -243,8 +185,8 @@ func (m model) renderScoreboardView() string {
 	}
 	// Scrolling window logic: ensure cursor is always visible
 	start := 0
-	if m.scoreboardCursor >= windowSize {
-		start = m.scoreboardCursor - windowSize + 1
+	if m.scoreboard.cursor >= windowSize {
+		start = m.scoreboard.cursor - windowSize + 1
 	}
 	if start > len(filtered)-windowSize {
 		start = len(filtered) - windowSize
@@ -261,7 +203,7 @@ func (m model) renderScoreboardView() string {
 				teamName = fmt.Sprintf("%s %s", team.Name, helpStyle.Render("(solo)"))
 			}
 			cursor := "  "
-			if i == m.scoreboardCursor {
+			if i == m.scoreboard.cursor {
 				cursor = selectedStyle.Render("> ")
 			}
 			b.WriteString(fmt.Sprintf("%s%-4d %-20s %-8d %d\n", cursor, i+1, teamName, team.PlayerCount, team.Score))
@@ -294,7 +236,7 @@ func (m model) renderTeamView() string {
 		if err != nil {
 			teamName = "Error fetching name"
 		}
-		joinCode := m.teamJoinCode
+		joinCode := m.team.teamJoinCode
 		sshCmd := ""
 		if joinCode != "" {
 			if config.Port == 22 {
@@ -303,11 +245,11 @@ func (m model) renderTeamView() string {
 				sshCmd = fmt.Sprintf("ssh %s@%s -p %d", joinCode, config.Host, config.Port)
 			}
 		}
-		options := []string{"Leave Team", "Regenerate Join Code"}
+		options := []string{"Leave Team", "Regenerate Join Code", "View Team Members"}
 		var menu strings.Builder
 		for i, option := range options {
 			cursor := "  "
-			if i == m.teamMenuCursor {
+			if i == m.team.cursor {
 				cursor = selectedStyle.Render("> ")
 			}
 			menu.WriteString(cursor + option + "\n")
@@ -324,7 +266,7 @@ func (m model) renderTeamView() string {
 		menu.WriteString("You have not joined a team.\n\n")
 		for i, option := range options {
 			cursor := "  "
-			if i == m.teamMenuCursor {
+			if i == m.team.cursor {
 				cursor = selectedStyle.Render("> ")
 			}
 			menu.WriteString(cursor + option + "\n")
@@ -338,7 +280,7 @@ func (m model) renderTeamView() string {
 		if m.messageType == "error" {
 			style = errorStyle
 		}
-		message = "\n\n" + style.Render(m.message)
+		message = style.Render(m.message)
 	}
 
 	help := ""
@@ -399,4 +341,37 @@ func (m model) renderPromptJoinTeamView() string {
 		return confirmStyle.Render(fmt.Sprintf("\n  Join team '%s'? (y/n)\n", m.joinPrompt.team.Name))
 	}
 	return confirmStyle.Render("\n  Invalid team join code.\n")
+}
+
+func (m model) renderTeamMembersView() string {
+	title := titleStyle.Render("Team Members")
+
+	if m.user.TeamID == nil {
+		return title + "\n\nYou are not on a team."
+	}
+
+	if len(m.teamMembers.members) == 0 {
+		return title + "\n\nNo team members found."
+	}
+
+	var content strings.Builder
+	content.WriteString(title + "\n\n")
+	content.WriteString(fmt.Sprintf("%-20s %-10s\n", "Username", "Points"))
+	content.WriteString(strings.Repeat("─", 35) + "\n")
+
+	for i, member := range m.teamMembers.members {
+		cursor := "  "
+		if i == m.teamMembers.cursor {
+			cursor = selectedStyle.Render("  ")
+		}
+		content.WriteString(fmt.Sprintf("%s%-20s %-10d\n", cursor, member.User.Username, member.Points))
+	}
+
+	help := ""
+	if m.showHelp {
+		help = "\n" + helpStyle.Render("↑/↓: scroll  q/Esc: back  ?: toggle help")
+	} else {
+		help = "\n" + helpStyle.Render("Press '?' for help.")
+	}
+	return content.String() + help
 }

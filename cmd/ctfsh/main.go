@@ -5,10 +5,10 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"log"
 	"os"
 	"sync"
-	"fmt"
 
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
@@ -26,7 +26,7 @@ import (
 
 func main() {
 	log.Println("Starting CTF SSH server...")
-	if err := db.InitDB(); err != nil {
+	if err := db.Init(); err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
 	defer db.Close()
@@ -53,15 +53,14 @@ func main() {
 
 	handler := scp.NewFileSystemHandler(config.DownloadRoot)
 
-	hostKeyPath := "host_key"
-	if _, err := os.Stat(hostKeyPath); os.IsNotExist(err) {
+	if _, err := os.Stat(config.HostKeyPath); os.IsNotExist(err) {
 		key, err := rsa.GenerateKey(rand.Reader, 2048)
 		if err != nil {
 			log.Fatal("Failed to generate host key:", err)
 		}
 		keyBytes := x509.MarshalPKCS1PrivateKey(key)
 		keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyBytes})
-		if err := os.WriteFile(hostKeyPath, keyPEM, 0600); err != nil {
+		if err := os.WriteFile(config.HostKeyPath, keyPEM, 0600); err != nil {
 			log.Fatal("Failed to write host key:", err)
 		}
 		log.Println("Generated new host key.")
@@ -69,7 +68,7 @@ func main() {
 
 	s, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf(":%d", config.Port)),
-		wish.WithHostKeyPath(hostKeyPath),
+		wish.WithHostKeyPath(config.HostKeyPath),
 		wish.WithPublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
 			return true
 		}),
