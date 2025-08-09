@@ -194,19 +194,22 @@ func (m model) renderScoreboardView() string {
 	if start < 0 {
 		start = 0
 	}
+
 	end := min(start+windowSize, len(filtered))
 	for i := start; i < end; i++ {
 		if i < len(filtered) {
 			team := filtered[i]
 			teamName := team.Name
+			paddingLen := 20 - len(teamName)
 			if team.ID < 0 {
 				teamName = fmt.Sprintf("%s %s", team.Name, helpStyle.Render("(solo)"))
+				paddingLen -= 6
 			}
 			cursor := "  "
 			if i == m.scoreboard.cursor {
 				cursor = selectedStyle.Render("> ")
 			}
-			b.WriteString(fmt.Sprintf("%s%-4d %-20s %-8d %d\n", cursor, i+1, teamName, team.PlayerCount, team.Score))
+			b.WriteString(fmt.Sprintf("%s%-4d %s%s %-8d %d\n", cursor, i+1, teamName, strings.Repeat(" ", paddingLen), team.PlayerCount, team.Score))
 			teamRows++
 		} else {
 			break
