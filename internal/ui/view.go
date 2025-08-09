@@ -203,7 +203,7 @@ func (m model) renderScoreboardView() string {
 			paddingLen := 20 - len(teamName)
 			if team.ID < 0 {
 				teamName = fmt.Sprintf("%s %s", team.Name, helpStyle.Render("(solo)"))
-				paddingLen -= 6
+				paddingLen -= 7
 			}
 			cursor := "  "
 			if i == m.scoreboard.cursor {
