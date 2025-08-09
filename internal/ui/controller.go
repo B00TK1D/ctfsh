@@ -502,6 +502,11 @@ func TeaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 
 	lipgloss.SetColorProfile(termenv.TrueColor)
 
+	if s.PublicKey() == nil {
+		wish.Fatalln(s, "No public key provided, to use CTFsh please first run `ssh-keygen` to generate a key pair and then try reconnecting.")
+		return nil, nil
+	}
+
 	sshKeyBytes := s.PublicKey().Marshal()
 	sshKeyStr := string(sshKeyBytes)
 	sshUser := s.User()

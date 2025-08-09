@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/wish/logging"
 	"github.com/charmbracelet/wish/scp"
 	_ "github.com/mattn/go-sqlite3"
+	gossh "golang.org/x/crypto/ssh"
 
 	"ctfsh/internal/config"
 	"ctfsh/internal/db"
@@ -77,6 +78,9 @@ func main() {
 		wish.WithAddress(fmt.Sprintf(":%d", config.Port)),
 		wish.WithHostKeyPath(config.HostKeyPath),
 		wish.WithPublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
+			return true
+		}),
+		wish.WithKeyboardInteractiveAuth(func(ctx ssh.Context, challenge gossh.KeyboardInteractiveChallenge) bool {
 			return true
 		}),
 		func(s *ssh.Server) error {
