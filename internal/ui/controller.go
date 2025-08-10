@@ -134,7 +134,7 @@ func (m model) View() string {
 	if m.confirmQuit {
 		msg := "Are you sure you want to quit? (y/n)"
 		centered := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Render(msg)
-		verticalPad := max((m.height-1)/2, 0)
+		verticalPad := genericMax((m.height-1)/2, 0)
 		return strings.Repeat("\n", verticalPad) + centered
 	}
 
@@ -160,7 +160,7 @@ func (m model) View() string {
 	case confirmDeleteTeamView:
 		msg := m.renderConfirmDeleteTeamView()
 		centered := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Render(msg)
-		verticalPad := max((m.height-1)/2, 0)
+		verticalPad := genericMax((m.height-1)/2, 0)
 		return strings.Repeat("\n", verticalPad) + centered
 	case promptJoinTeamView:
 		s = m.renderPromptJoinTeamView()
@@ -178,7 +178,7 @@ func (m model) View() string {
 			maxLineWidth = w
 		}
 	}
-	leftPad := max((m.width-maxLineWidth)/2, 0)
+	leftPad := genericMax((m.width-maxLineWidth)/2, 0)
 	padStr := strings.Repeat(" ", leftPad)
 	for i, line := range windowLines {
 		windowLines[i] = padStr + line
@@ -186,7 +186,7 @@ func (m model) View() string {
 	window = strings.Join(windowLines, "\n")
 	windowHeight := lipgloss.Height(window)
 	if windowHeight < m.height {
-		verticalPad := max((m.height-windowHeight)/2, 0)
+		verticalPad := genericMax((m.height-windowHeight)/2, 0)
 		return strings.Repeat("\n", verticalPad) + window
 	}
 	return window
