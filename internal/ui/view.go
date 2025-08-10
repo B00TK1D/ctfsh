@@ -209,7 +209,7 @@ func (m model) renderScoreboardView() string {
 			if i == m.scoreboard.cursor {
 				cursor = selectedStyle.Render("> ")
 			}
-			b.WriteString(fmt.Sprintf("%s%-4d %s%s %-8d %d\n", cursor, i+1, teamName, strings.Repeat(" ", paddingLen), team.PlayerCount, team.Score))
+			b.WriteString(fmt.Sprintf("%s%-4d %s%s %-8d %d\n", cursor, team.place, teamName, strings.Repeat(" ", paddingLen), team.PlayerCount, team.Score))
 			teamRows++
 		} else {
 			break

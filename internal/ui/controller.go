@@ -312,25 +312,19 @@ func (m model) updateChallengeDetailView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateScoreboardView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Delegate to scoreboard model
-	newModel, cmd := m.scoreboard.update(msg)
-	if newModel != nil {
-		// Handle any messages from the scoreboard model
-		return m, cmd
-	}
-
-	// Check if we got a command that should be handled
-	if cmd != nil {
-		return m, cmd
-	}
+	m.scoreboard.update(msg)
+	m.inputFocus = m.scoreboard.searchMode
 
 	switch {
 	case key.Matches(msg, keys.Back):
-		m.state = menuView
+		if !m.inputFocus {
+			m.state = menuView
+		}
 	case key.Matches(msg, keys.Help):
 		m.showHelp = !m.showHelp
 	}
 	return m, nil
+
 }
 
 func (m model) updateTeamView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

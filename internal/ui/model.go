@@ -61,6 +61,7 @@ type model struct {
 	help        help.Model
 	showHelp    bool
 	confirmQuit bool
+	inputFocus  bool
 
 	// Registration flow
 	usernameInput textinput.Model
