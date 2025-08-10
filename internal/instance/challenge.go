@@ -26,6 +26,8 @@ func CreateChallengeImage(name string, challengePath string) {
 		}
 	}
 
+	ensureNetworkExists("chals")
+
 	op, err := c.CreateInstance(api.InstancesPost{
 		Name: builderName,
 		InstancePut: api.InstancePut{
@@ -38,6 +40,10 @@ func CreateChallengeImage(name string, challengePath string) {
 					"type":   "disk",
 					"source": challengePath,
 					"path":   "/mnt/chal",
+				},
+				"eth0": {
+					"type":   "nic",
+					"network": "chals",
 				},
 			},
 		},
@@ -103,6 +109,12 @@ func StartChallenge(image string, name string) {
 			Architecture: "x86_64",
 			Config: map[string]string{
 				"security.nesting": "true",
+			},
+			Devices: map[string]map[string]string{
+				"eth0": {
+					"type":   "nic",
+					"network": "chals",
+				},
 			},
 		},
 		Source: api.InstanceSource{

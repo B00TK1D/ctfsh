@@ -3,7 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    privileged: true
     ports:
       - "3456:5000"
     environment:

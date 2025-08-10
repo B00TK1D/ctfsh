@@ -107,3 +107,23 @@ func stopContainer(name string) {
 	util.Must(op.Wait())
 	log.Info("Challenge stopped and instance deleted", "name", name)
 }
+
+func ensureNetworkExists(name string) {
+	c := getIncusConnection()
+	_, _, err := c.GetNetwork(name)
+	if err == nil {
+		log.Info("Network already exists", "name", name)
+		return
+	}
+
+	log.Info("Creating network", "name", name)
+	err = c.CreateNetwork(api.NetworksPost{
+		Name: name,
+		Type: "bridge",
+	})
+	if err != nil {
+		log.Error("Failed to create network", "name", name, "error", err)
+		return
+	}
+	log.Info("Network created successfully", "name", name)
+}

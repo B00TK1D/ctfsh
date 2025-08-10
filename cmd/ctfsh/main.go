@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/charmbracelet/ssh"
@@ -16,6 +17,7 @@ import (
 	"github.com/charmbracelet/wish/logging"
 	"github.com/charmbracelet/wish/scp"
 	_ "github.com/mattn/go-sqlite3"
+	gossh "golang.org/x/crypto/ssh"
 
 	"ctfsh/internal/config"
 	"ctfsh/internal/db"
@@ -43,7 +45,13 @@ func main() {
 		if len(ch.Ports) > 0 {
 			wg.Add(1)
 			go func() {
-				instance.CreateChallengeImage(ch.Name, config.ChallengeDir+"/"+ch.Name)
+				path, err := filepath.Abs(config.ChallengeDir + "/" + ch.Name)
+				if err != nil {
+					log.Printf("Failed to get absolute path for challenge %s: %v", ch.Name, err)
+					wg.Done()
+					return
+				}
+				instance.CreateChallengeImage(ch.Name, path)
 				wg.Done()
 			}()
 		}
@@ -70,6 +78,9 @@ func main() {
 		wish.WithAddress(fmt.Sprintf(":%d", config.Port)),
 		wish.WithHostKeyPath(config.HostKeyPath),
 		wish.WithPublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
+			return true
+		}),
+		wish.WithKeyboardInteractiveAuth(func(ctx ssh.Context, challenge gossh.KeyboardInteractiveChallenge) bool {
 			return true
 		}),
 		func(s *ssh.Server) error {
