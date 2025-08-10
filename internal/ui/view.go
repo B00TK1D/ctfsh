@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -11,24 +10,9 @@ import (
 	"ctfsh/internal/db"
 
 	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"
 )
-
-// genericMin returns the smaller of two ints.
-func genericMin(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// genericMax returns the larger of two ints.
-func genericMax(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 func (m model) renderMenuView() string {
 	title := titleStyle.Render("🚩 CTFsh")
@@ -186,21 +170,17 @@ func (m model) renderScoreboardView() string {
 	title := titleStyle.Render("Scoreboard")
 
 	filtered := m.scoreboard.filteredScoreboard()
-	var selected *scoreboardTeam
-	if m.scoreboard.cursor >= 0 && m.scoreboard.cursor < len(filtered) {
-		t := filtered[m.scoreboard.cursor]
-		selected = &t
-	}
+	// Cursor comes from table; selection used only for later features if needed
 	var b strings.Builder
 	// Always show title
 	b.WriteString(title + "\n\n")
 
 	// Render time series chart of scores for the top entries
-	// Choose up to 5 top entries based on current scoreboard order
-	maxSeries := min(5, len(m.scoreboard.teams))
+	// Choose up to 10 entries based on current visible (filtered) table order
+	maxSeries := min(10, len(filtered))
 	// Determine chart dimensions to fit within the centered window
 	// Window width is m.width/2; subtract border (2) + padding (8)
-	chartWidth := genericMax((m.width/2)-10, 20)
+	chartWidth := max(m.width-22, 20)
 	chartHeight := 10
 	// Build datasets
 	if maxSeries > 0 && chartWidth > 0 && chartHeight > 0 {
@@ -237,12 +217,8 @@ func (m model) renderScoreboardView() string {
 		}
 		var seriesList []series
 
-		// Increase to top 10
-		if maxSeries > 10 {
-			maxSeries = 10
-		}
 		for i := 0; i < maxSeries; i++ {
-			t := m.scoreboard.teams[i]
+			t := filtered[i]
 			var points []db.ScorePoint
 			var err error
 			if t.ID < 0 {
@@ -254,7 +230,7 @@ func (m model) renderScoreboardView() string {
 				continue
 			}
 			// Convert to chart TimePoints
-			ts := make([]timeserieslinechart.TimePoint, 0, genericMax(1, len(points)))
+			ts := make([]timeserieslinechart.TimePoint, 0, max(1, len(points)))
 			var last float64
 			for _, p := range points {
 				v := float64(p.Score)
@@ -299,7 +275,7 @@ func (m model) renderScoreboardView() string {
 					chart.PushDataSet(s.name, tp)
 				}
 				// Determine palette index by rank (place) if available from order
-				// seriesList is in order of scoreboard rank among selected teams
+				// seriesList is in order of visible table (filtered) among selected teams
 				// Use that index for color mapping
 				idx := 0
 				for i := range seriesList {
@@ -312,49 +288,7 @@ func (m model) renderScoreboardView() string {
 				st := lipgloss.NewStyle().Foreground(palette[idx%len(palette)])
 				chart.SetDataSetStyle(s.name, st)
 			}
-			// If selected team is not in the top N, add a bold line just for that team
-			if selected != nil {
-				found := false
-				for _, s := range seriesList {
-					if s.id == selected.ID {
-						found = true
-						break
-					}
-				}
-				if !found {
-					// Fetch selected team series
-					var pts []db.ScorePoint
-					var err error
-					if selected.ID < 0 {
-						pts, err = db.GetUserScoreTimeSeries(-selected.ID)
-					} else {
-						pts, err = db.GetTeamScoreTimeSeries(selected.ID)
-					}
-					if err == nil {
-						ts := make([]timeserieslinechart.TimePoint, 0, genericMax(2, len(pts)))
-						last := 0.0
-						for _, p := range pts {
-							v := float64(p.Score)
-							ts = append(ts, timeserieslinechart.TimePoint{Time: p.Time, Value: v})
-							last = v
-							if v > maxY {
-								maxY = v
-							}
-						}
-						if len(ts) == 0 || ts[0].Time.After(minTime) {
-							ts = append([]timeserieslinechart.TimePoint{{Time: minTime, Value: 0}}, ts...)
-						}
-						if len(ts) == 0 || ts[len(ts)-1].Time.Before(maxTime) {
-							ts = append(ts, timeserieslinechart.TimePoint{Time: maxTime, Value: last})
-						}
-						for _, tp := range ts {
-							chart.PushDataSet(selected.Name, tp)
-						}
-						// Color selected extra series brightly; no bold on braille
-						chart.SetDataSetStyle(selected.Name, lipgloss.NewStyle().Foreground(lipgloss.Color("15")))
-					}
-				}
-			}
+			// No extra series: graph strictly matches top 10 visible rows
 		}
 
 		if haveTimeRange {
@@ -381,149 +315,91 @@ func (m model) renderScoreboardView() string {
 		b.WriteString("Press '/' to search\n")
 	}
 
-	// Compute dynamic column widths to fit the window
-	contentWidth := genericMax((m.width/2)-10, 20) // account for window border/padding
-	cursorWidth := 2
-	rowBaseWidth := contentWidth - cursorWidth
-	rankWidth := 4
-	// Determine numeric column widths from data
-	maxPlayers := 0
+	// Build a bubbles table instead of manual formatting
+	contentWidth := max(m.width-18, 20)
+	// Determine columns dynamically
 	maxScore := 0
 	for _, t := range m.scoreboard.teams {
-		if t.PlayerCount > maxPlayers {
-			maxPlayers = t.PlayerCount
-		}
 		if t.Score > maxScore {
 			maxScore = t.Score
 		}
 	}
-	playersWidth := genericMax(len("Players"), len(strconv.Itoa(maxPlayers)))
-	scoreWidth := genericMax(len("Score"), len(strconv.Itoa(maxScore)))
-	// Spaces: 1 (rank-team) + 1 (team-players) + 3 (players-score) + 2 (right pad) = 7
-	teamWidth := max(rowBaseWidth-rankWidth-playersWidth-scoreWidth-7, 8)
+	scoreWidth := max(len("Score"), len(fmt.Sprintf("%d", maxScore)))
+	rankWidth := 4
+	teamWidth := max(6, contentWidth-rankWidth-scoreWidth-6)
 
-	// Header (no cursor on header line)
-	header := fmt.Sprintf("%-*s %-*s   %*s   %*s\n",
-		rankWidth, "Rank",
-		teamWidth, "Team",
-		playersWidth, "Players",
-		scoreWidth, "Score",
-	)
-	b.WriteString(header)
-	b.WriteString(strings.Repeat("─", contentWidth) + "\n")
+	// Update and size the table (do not colorize here so Selected style applies a grey background only)
+	m.scoreboard.tbl.SetColumns([]table.Column{
+		{Title: "Rank", Width: rankWidth},
+		{Title: "Team", Width: teamWidth},
+		{Title: "Score", Width: scoreWidth},
+	})
+	m.scoreboard.tbl.SetWidth(contentWidth)
+	// Auto-resize height: show at least 5 rows (plus header), at most all filtered rows
+	visibleRows := max(5, min(20, len(filtered)))
+	m.scoreboard.tbl.SetHeight(visibleRows + 1)
 
-	// Show up to 20 rows, or as many as fit on the screen
-	windowSize := genericMin(len(m.scoreboard.teams), 20)
-	teamRows := 0
-	if len(filtered) == 0 {
-		b.WriteString(helpStyle.Render("(no teams match search)\n"))
-		teamRows++
+	// Populate rows with colorized team names for top 10 visible rows to match graph palette
+	rows := make([]table.Row, 0, len(filtered))
+	palette := []lipgloss.Color{
+		lipgloss.Color("205"), // magenta
+		lipgloss.Color("39"),  // blue
+		lipgloss.Color("208"), // orange
+		lipgloss.Color("82"),  // green
+		lipgloss.Color("196"), // red
+		lipgloss.Color("45"),  // cyan
+		lipgloss.Color("226"), // yellow
+		lipgloss.Color("135"), // purple
+		lipgloss.Color("50"),  // teal
+		lipgloss.Color("201"), // pink
 	}
-	// Scrolling window logic: ensure cursor is always visible
-	start := 0
-	if m.scoreboard.cursor >= windowSize {
-		start = m.scoreboard.cursor - windowSize + 1
+	// Determine selected row index so we can avoid styling conflicts there
+	selectedIdx := -1
+	if m.scoreboard.tbl.Cursor() >= 0 && m.scoreboard.tbl.Cursor() < len(filtered) {
+		selectedIdx = m.scoreboard.tbl.Cursor()
 	}
-	if start > len(filtered)-windowSize {
-		start = len(filtered) - windowSize
-	}
-	if start < 0 {
-		start = 0
-	}
-
-	end := genericMin(start+windowSize, len(filtered))
-	for i := start; i < end; i++ {
-		if i < len(filtered) {
-			team := filtered[i]
-			baseName := team.Name
-			paddingLen := 20 - len(baseName)
+	for i, t := range filtered {
+		// When selected, avoid inner ANSI styles entirely so the table's Selected background
+		// applies across the entire row (including the (solo) suffix).
+		if i == selectedIdx {
+			base := t.Name
 			suffix := ""
-
-			if team.ID < 0 {
-				suffix = " " + helpStyle.Render("(solo)")
-				paddingLen -= 7
+			if t.ID < 0 {
+				suffix = " (solo)"
 			}
-
-			// Name color is applied to the entire padded cell below
-			cursor := "  "
-			if i == m.scoreboard.cursor {
-				cursor = selectedStyle.Render("> ")
-			}
-
-			// Build styled team cell and pad using lipgloss.Width to ignore ANSI codes
-			nameStyled := baseName
-			if team.place <= 10 {
-				pal := []lipgloss.Color{
-					lipgloss.Color("205"), lipgloss.Color("39"), lipgloss.Color("208"), lipgloss.Color("82"), lipgloss.Color("196"),
-					lipgloss.Color("45"), lipgloss.Color("226"), lipgloss.Color("135"), lipgloss.Color("50"), lipgloss.Color("201"),
-				}
-				nameStyled = lipgloss.NewStyle().Foreground(pal[(team.place-1)%len(pal)]).Render(baseName)
-			}
-			styledSuffix := suffix
-			combined := nameStyled + styledSuffix
-
-			// If too wide, drop suffix first
-			if lipgloss.Width(combined) > teamWidth {
-				combined = nameStyled
-			}
-
-			// If still too wide, truncate base name and re-style
-			if lipgloss.Width(combined) > teamWidth {
-				// truncate plain base name by runes, append ellipsis
-				r := []rune(baseName)
-				if teamWidth > 1 && len(r) >= teamWidth-1 {
-					r = r[:teamWidth-1]
-					truncated := string(r) + "…"
-					if team.place <= 10 {
-						pal := []lipgloss.Color{
-							lipgloss.Color("205"), lipgloss.Color("39"), lipgloss.Color("208"), lipgloss.Color("82"), lipgloss.Color("196"),
-							lipgloss.Color("45"), lipgloss.Color("226"), lipgloss.Color("135"), lipgloss.Color("50"), lipgloss.Color("201"),
-						}
-						combined = lipgloss.NewStyle().Foreground(pal[(team.place-1)%len(pal)]).Render(truncated)
-					} else {
-						combined = truncated
-					}
-				} else if teamWidth > 0 {
-					r = r[:teamWidth]
-					truncated := string(r)
-					if team.place <= 10 {
-						pal := []lipgloss.Color{
-							lipgloss.Color("205"), lipgloss.Color("39"), lipgloss.Color("208"), lipgloss.Color("82"), lipgloss.Color("196"),
-							lipgloss.Color("45"), lipgloss.Color("226"), lipgloss.Color("135"), lipgloss.Color("50"), lipgloss.Color("201"),
-						}
-						combined = lipgloss.NewStyle().Foreground(pal[(team.place-1)%len(pal)]).Render(truncated)
-					} else {
-						combined = truncated
-					}
-				}
-			}
-
-			if lipgloss.Width(combined) < teamWidth {
-				combined += strings.Repeat(" ", teamWidth-lipgloss.Width(combined))
-			}
-			teamCell := combined
-
-			line := fmt.Sprintf("%s%-*d %s %*d   %*d  ",
-				cursor,
-				rankWidth, team.place,
-				teamCell,
-				playersWidth, team.PlayerCount,
-				scoreWidth, team.Score,
-			)
-
-			b.WriteString(line)
-			b.WriteString("\n")
-			teamRows++
-
-		} else {
-			break
+			rows = append(rows, table.Row{
+				fmt.Sprintf("%d", t.place),
+				base + suffix,
+				fmt.Sprintf("%d", t.Score),
+			})
+			continue
 		}
-	}
 
-	// Pad with blank lines if needed
-	for i := teamRows; i < windowSize; i++ {
-		b.WriteString("\n")
+		// Non-selected: color-match top 10 names to graph lines
+		base := t.Name
+		if i < 10 {
+			base = lipgloss.NewStyle().Foreground(palette[i%len(palette)]).Render(base)
+		}
+		// Keep solo suffix greyed out
+		suffix := ""
+		if t.ID < 0 {
+			suffix = " " + helpStyle.Render("(solo)")
+		}
+
+		rows = append(rows, table.Row{
+			fmt.Sprintf("%d", t.place),
+			base + suffix,
+			fmt.Sprintf("%d", t.Score),
+		})
 	}
+	m.scoreboard.tbl.SetRows(rows)
+	// Focused so it handles scrolling and highlighting; when searching, blur to avoid conflict
+	if m.scoreboard.searchMode {
+		m.scoreboard.tbl.Blur()
+	} else {
+		m.scoreboard.tbl.Focus()
+	}
+	b.WriteString(m.scoreboard.tbl.View())
 
 	help := ""
 	if m.showHelp {
