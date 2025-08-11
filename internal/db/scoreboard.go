@@ -1,7 +1,6 @@
 package db
 
 func GetScoreboard() ([]Team, error) {
-	// Get teams and their scores
 	rows, err := db.Query(`
 		SELECT t.id, t.name, COALESCE(SUM(c.points), 0) as score, COUNT(u.id) as player_count
 		FROM teams t
@@ -30,7 +29,6 @@ func GetScoreboard() ([]Team, error) {
 		teams = append(teams, team)
 	}
 
-	// Add solo users (users with no team) as their own 'team'
 	userRows, err := db.Query(`
 		SELECT u.id, u.username, COALESCE(SUM(c.points), 0) as score
 		FROM users u

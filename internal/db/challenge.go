@@ -115,7 +115,6 @@ func CreateChallenge(chal Challenge) {
 }
 
 func GetChallenges() map[string]Challenge {
-	// Get all challenges from the database, including downloads and ports
 	rows, err := db.Query("SELECT id, name, title, description, category, points, flag, author, build_dir FROM challenges")
 	if err != nil {
 		log.Printf("Failed to query challenges: %v\n", err)

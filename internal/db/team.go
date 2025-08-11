@@ -29,7 +29,6 @@ func GetTeamByJoinCode(code string) (*Team, error) {
 	return team, nil
 }
 
-// Generate a random 8-letter lowercase join code
 func GenerateJoinCode() string {
 	letters := []rune("abcdefghjkmnpqrstuvwxyz")
 	b := make([]rune, 10)
@@ -50,7 +49,7 @@ func CreateAndJoinTeam(creatorID int, teamName string) (*Team, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback() // Rollback on error
+	defer tx.Rollback()
 
 	joinCode := GenerateJoinCode()
 	res, err := tx.Exec("INSERT INTO teams (name, join_code) VALUES (?, ?)", teamName, joinCode)
@@ -99,7 +98,6 @@ func GetTeamName(teamID int) (string, error) {
 	return name, err
 }
 
-// Returns all users on a team
 func GetTeamMembers(teamID int) ([]User, error) {
 	rows, err := db.Query("SELECT id, username, ssh_key, team_id FROM users WHERE team_id = ?", teamID)
 	if err != nil {
@@ -118,7 +116,6 @@ func GetTeamMembers(teamID int) ([]User, error) {
 	return users, nil
 }
 
-// Returns the number of members in a team
 func CountTeamMembers(teamID int) (int, error) {
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE team_id = ?", teamID).Scan(&count); err != nil {
@@ -127,28 +124,24 @@ func CountTeamMembers(teamID int) (int, error) {
 	return count, nil
 }
 
-// Deletes a team by ID
 func DeleteTeam(teamID int) error {
 	_, err := db.Exec("DELETE FROM teams WHERE id = ?", teamID)
 	return err
 }
 
-// Generate test teams for scoreboard testing
 func GenerateTestTeams(n int) error {
 	nameRunes := []rune("abcdefghjkmnpqrstuvwxyz")
 	for range n {
-		// Generate random team name (6-10 chars)
 		nameLen := rand.IntN(5) + 6
 		nameRunesSlice := make([]rune, nameLen)
 		for j := range nameRunesSlice {
 			nameRunesSlice[j] = nameRunes[rand.IntN(len(nameRunes))]
 		}
 		teamName := string(nameRunesSlice)
-		team, err := CreateAndJoinTeam(-1, teamName) // -1: we'll update users below
+		team, err := CreateAndJoinTeam(-1, teamName)
 		if err != nil {
-			continue // skip duplicates
+			continue
 		}
-		// Add 1-5 users to the team
 		userCount := rand.IntN(5) + 1
 		for u := range userCount {
 			uname := fmt.Sprintf("%s_user%d", teamName, u+1)
@@ -157,7 +150,6 @@ func GenerateTestTeams(n int) error {
 			if err != nil {
 				continue
 			}
-			// Assign user to team
 			db.Exec("UPDATE users SET team_id = ? WHERE id = ?", team.ID, user.ID)
 		}
 	}

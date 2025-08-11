@@ -88,14 +88,9 @@ func DirectTCPChannelHandler(srv *ssh.Server, conn *gossh.ServerConn, newChan go
 		}
 	}()
 
-	// Wait for either direction to close or session context to be done
 	<-done
-
-	// Close connections to stop the other goroutine
 	target.Close()
 	channel.Close()
-
-	// Wait for both goroutines to finish
 	wg.Wait()
 
 	log.Info("Connection closed", "container", containerName)

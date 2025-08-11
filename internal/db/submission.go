@@ -41,7 +41,6 @@ func SubmitFlag(userID, challengeID int, flag string) (bool, error) {
 	return correct, err
 }
 
-// Returns a map of challenge_id to username for the first solver on the team
 func GetTeamChallengeSolvers(teamID int) (map[int]string, error) {
 	query := `
 	SELECT s.challenge_id, u.username

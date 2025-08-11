@@ -4,18 +4,12 @@ import (
 	"time"
 )
 
-// ScorePoint represents a cumulative score value at a specific time.
 type ScorePoint struct {
 	Time  time.Time
 	Score int
 }
 
-// GetTeamScoreTimeSeries returns a cumulative score time series for a team.
-// The scoring matches the scoreboard logic that counts a challenge once per user.
 func GetTeamScoreTimeSeries(teamID int) ([]ScorePoint, error) {
-	// Fetch all correct submissions for users on the team, in timestamp order,
-	// including challenge points and the user and challenge identifiers so we can
-	// de-duplicate repeats by the same user on the same challenge.
 	rows, err := db.Query(`
 		SELECT s.timestamp, c.points, s.user_id, s.challenge_id
 		FROM submissions s
@@ -49,8 +43,6 @@ func GetTeamScoreTimeSeries(teamID int) ([]ScorePoint, error) {
 	return series, nil
 }
 
-// GetUserScoreTimeSeries returns a cumulative score time series for a solo user.
-// The scoring matches the scoreboard logic that counts a challenge once per user.
 func GetUserScoreTimeSeries(userID int) ([]ScorePoint, error) {
 	rows, err := db.Query(`
 		SELECT s.timestamp, c.points, s.challenge_id

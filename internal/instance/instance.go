@@ -35,7 +35,7 @@ func HandleInstanceRequest(s ssh.Session, user *db.User, chal db.Challenge) {
 
 	fmt.Fprintf(s, "\x1b[?25l\n   %s\n\n", chal.Name)
 	fmt.Fprintf(s, "   %s\n\n", chal.Description)
-	// Show loading spinner
+
 	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	spinnerIdx := 0
 	ticker := time.NewTicker(75 * time.Millisecond)
